@@ -1,422 +1,678 @@
+// background.js
+
 // Constants
 const CALENDAR_CHECK_ALARM = 'calendarCheckAlarm';
 const RULE_PRIORITY = 1;
-const FOCUS_RULE_ID_START = 1000;
-const MAX_BLOCKED_SITES = 100; // Max rules allowed by DNR is higher, but keep this reasonable
+const FOCUS_RULE_ID_START = 1000; // Start ID for DNR rules
+const MAX_BLOCKED_SITES = 100; // Max DNR rules to create (Chrome has a higher limit, but keep this reasonable)
 const FOCUS_RULE_ID_END = FOCUS_RULE_ID_START + MAX_BLOCKED_SITES - 1;
 
 // --- Global State (for quick access in listeners) ---
-let currentFocusState = false;
-let currentBlockedSites = []; // Store processed domains here
-let redirectUrl = ''; // Cache the redirect URL
+let currentFocusState = false; // Is the extension currently in focus mode?
+let currentSitesConfig = [];   // Array of {domain: string, message: string|null}
+let currentBlockedDomains = []; // Derived list of domain strings for DNR rules
+let currentGlobalBlockMessage = ''; // Cached global fallback message
+let redirectUrl = '';             // Cached URL for blocked.html
+let extensionIsEnabled = true;    // Cached enabled status
 
-// Function to load initial state (sites and enabled status)
-async function loadInitialState() {
-    const data = await chrome.storage.sync.get(['blockedSites', 'isEnabled']);
-    currentBlockedSites = (data.blockedSites || []).map(extractDomain).filter(Boolean); // Store processed domains
-    const isEnabled = data.isEnabled === undefined ? true : data.isEnabled;
-    // Initial focus state will be determined by the first checkCalendarAndSetBlocking call
-    console.log("Initial state loaded. Enabled:", isEnabled, "Blocked domains:", currentBlockedSites);
-    redirectUrl = chrome.runtime.getURL('blocked.html'); // Cache redirect URL
-}
+// --- Default values used if storage is corrupt/empty ---
+const defaultSitesConfigForBG = [
+    { domain: "youtube.com", message: "Maybe watch this later?" },
+    { domain: "facebook.com", message: null },
+    { domain: "twitter.com", message: null },
+    { domain: "reddit.com", message: "Focus time! No endless scrolling." }
+];
+const defaultGlobalMessageForBG = 'This site is blocked during your scheduled focus time.';
+const defaultFocusKeyword = '[Focus]';
 
-// --- Initialization ---
-chrome.runtime.onInstalled.addListener(async (details) => {
-    console.log('Calendar Focus Blocker installed/updated.', details.reason);
-    // Set default settings on first install
-    if (details.reason === 'install') {
-        await chrome.storage.sync.set({
-            blockedSites: ['youtube.com', 'facebook.com', 'twitter.com', 'reddit.com'],
-            customMessage: 'This site is blocked during your scheduled focus time.',
-            focusKeyword: '[Focus]',
-            isEnabled: true // Default to enabled
-        });
-         console.log("Default settings applied.");
+// --- Helper Functions ---
+
+// Extracts base domain (e.g., "google.com" from "sub.google.com" or "google.co.uk" from "www.google.co.uk")
+function extractDomain(urlInput) {
+    let domain = urlInput ? urlInput.trim() : '';
+    if (!domain) return null;
+
+    // Add protocol if missing for URL parser, default to http for robustness
+    if (!/^(?:f|ht)tps?\:\/\//.test(domain)) {
+        domain = 'http://' + domain;
     }
 
-    await loadInitialState(); // Load sites into memory
-    scheduleNextCheck();
-    // Perform initial check slightly delayed to ensure setup completes
-    setTimeout(checkCalendarAndSetBlocking, 2000);
-});
+    try {
+        const url = new URL(domain);
+        let hostname = url.hostname; // e.g., "www.google.com" or "mail.google.com" or "google.co.uk"
 
-// --- Service Worker Startup Logic ---
-// Load state whenever the service worker starts (might happen after inactivity)
-loadInitialState();
-// The initial check is also scheduled via onInstalled or the timeout below,
-// but ensuring state is loaded early is good.
-setTimeout(checkCalendarAndSetBlocking, 3000); // Also run check shortly after any SW restart
-
-// --- Alarms ---
-chrome.alarms.onAlarm.addListener(alarm => {
-    if (alarm.name === CALENDAR_CHECK_ALARM) {
-        console.log('Alarm triggered: Checking calendar...');
-        checkCalendarAndSetBlocking(); // This will also schedule the next check now
-    }
-});
-
-function scheduleNextCheck() {
-    // Clear previous alarm just in case
-    chrome.alarms.clear(CALENDAR_CHECK_ALARM, (wasCleared) => {
-         // Check every 5 minutes (adjust as needed) - Use periodsInMinutes for reliability
-        chrome.alarms.create(CALENDAR_CHECK_ALARM, { periodInMinutes: 5 });
-        console.log('Scheduled next calendar check (every 5 mins).');
-    });
-}
-
-// --- Storage Changes ---
-chrome.storage.onChanged.addListener((changes, namespace) => {
-    let needsRecheck = false;
-    if (namespace === 'sync') {
-        console.log('Sync storage changed:', changes);
-        if (changes.blockedSites) {
-            currentBlockedSites = (changes.blockedSites.newValue || []).map(extractDomain).filter(Boolean);
-            console.log("Updated global blocked sites:", currentBlockedSites);
-            needsRecheck = true;
+        // Basic validation: must contain at least one dot and not be an IP address
+        if (!hostname.includes('.') || /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname)) {
+            return null;
         }
-        if (changes.focusKeyword) {
-            needsRecheck = true;
+
+        // Remove 'www.' prefix if it exists and isn't the only part
+        if (hostname.startsWith('www.') && hostname.split('.').length > 2) {
+            hostname = hostname.substring(4);
         }
-        if (changes.isEnabled !== undefined) {
-             // If disabling, immediately clear focus state and rules
-             if (!changes.isEnabled.newValue) {
-                 currentFocusState = false;
-                 updateBlockingRules(false); // Remove DNR rules
-                 // No need to re-check calendar if disabled
+
+        // Attempt to get the registrable domain part (e.g., google.com, google.co.uk)
+        // This is a simple heuristic and might not cover all edge cases perfectly
+        const parts = hostname.split('.');
+        if (parts.length >= 2) {
+             // Handle common TLDs like .co.uk, .com.au etc.
+             const maybeDoubleTld = parts.slice(-2).join('.');
+             if (parts.length >= 3 && ['co.uk', 'com.au', 'com.br', 'co.jp', 'gov.uk', 'ac.uk', /* add more as needed */].includes(maybeDoubleTld)) {
+                 return parts.slice(-3).join('.');
              } else {
-                 // If enabling, trigger a re-check
-                 needsRecheck = true;
+                 // Standard case: return last two parts
+                 return parts.slice(-2).join('.');
              }
-        }
-    }
-
-    if (needsRecheck) {
-        console.log('Relevant settings changed, re-evaluating blocking rules and tabs.');
-        // Immediately re-check and update rules/tabs
-        checkCalendarAndSetBlocking();
-    }
-});
-
-// --- Tab Event Listeners ---
-
-// On Tab Update (URL change)
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    // Check only when URL changes and focus mode is active
-    if (currentFocusState && changeInfo.url) {
-         console.log(`Tab updated: ${tabId}, New URL: ${changeInfo.url}`);
-         // Use the URL from changeInfo as it's the most recent
-        checkAndBlockTabIfNeeded(tabId, changeInfo.url);
-    }
-});
-
-// On Tab Activation (Switching Tabs)
-chrome.tabs.onActivated.addListener(async (activeInfo) => {
-    if (currentFocusState) {
-        console.log(`Tab activated: ${activeInfo.tabId}`);
-        try {
-            const tab = await chrome.tabs.get(activeInfo.tabId);
-            if (tab && tab.url) {
-                checkAndBlockTabIfNeeded(tab.id, tab.url);
-            }
-        } catch (error) {
-            // Handle cases where the tab might be closed before we get it
-            if (!error.message.includes("No tab with id")) {
-                 console.warn(`Error getting activated tab ${activeInfo.tabId}:`, error);
-            }
-        }
-    }
-});
-
-// --- Core Logic ---
-
-// Helper to check a specific tab and block if needed
-function checkAndBlockTabIfNeeded(tabId, url) {
-    if (!url || !redirectUrl || url.startsWith(redirectUrl)) {
-        return; // Ignore empty URLs, cases before redirect URL is set, or already blocked tabs
-    }
-
-    if (isUrlBlocked(url, currentBlockedSites)) {
-        console.log(`BLOCKING Tab: ${tabId}, URL: ${url}`);
-        chrome.tabs.update(tabId, { url: redirectUrl }).catch(error => {
-             // Ignore errors trying to update already closed tabs etc.
-            if (!error.message.includes("No tab with id") && !error.message.includes("Cannot access")) {
-                console.error(`Error updating tab ${tabId} to ${redirectUrl}:`, error);
-            }
-        });
-    }
-}
-
-// Helper to check existing tabs when focus starts
-async function checkExistingTabs() {
-    console.log("Focus mode started. Checking all existing tabs...");
-    try {
-        const tabs = await chrome.tabs.query({}); // Query all tabs
-        for (const tab of tabs) {
-            if (tab.id && tab.url) { // Ensure tab has ID and URL
-                // Small delay to prevent overwhelming the browser/API? Maybe not needed.
-                // await new Promise(resolve => setTimeout(resolve, 10));
-                checkAndBlockTabIfNeeded(tab.id, tab.url);
-            }
-        }
-        console.log("Finished checking existing tabs.");
-    } catch (error) {
-        console.error("Error querying or checking existing tabs:", error);
-    }
-}
-
-
-async function checkCalendarAndSetBlocking() {
-    const { isEnabled, focusKeyword } = await chrome.storage.sync.get(['isEnabled', 'focusKeyword']);
-
-    if (isEnabled === undefined) {
-        console.log("isEnabled status not yet determined, waiting for load/defaults.");
-        return; // Should be loaded by initialState, but safety check
-    }
-     if (!redirectUrl) {
-        console.log("Redirect URL not yet cached, waiting.");
-        redirectUrl = chrome.runtime.getURL('blocked.html'); // Try caching again
-        if (!redirectUrl) return;
-    }
-
-    // Always reschedule the next check *after* this one completes
-    // Use a finally block to ensure it happens even on error
-    let isInFocus = false; // Assume not in focus by default
-    try {
-        if (!isEnabled) {
-            console.log('Extension is disabled.');
-            if (currentFocusState) { // If it *was* in focus
-                currentFocusState = false;
-                await updateBlockingRules(false); // Ensure DNR rules are removed
-                updatePopupState('Disabled');
-            }
-            return; // Stop here if disabled
-        }
-
-        console.log('Checking calendar for focus events...');
-        const token = await getAuthToken(false); // false = don't prompt
-        if (!token) {
-            console.warn('Auth token not available. Needs authorization.');
-            if (currentFocusState) { // If it *was* in focus
-                currentFocusState = false;
-                await updateBlockingRules(false);
-            }
-            updatePopupState('Auth Required');
-            return;
-        }
-
-        // Get current focus status from Calendar
-        isInFocus = await isCurrentlyInFocusEvent(token, focusKeyword || '[Focus]');
-
-        // --- State Transition Logic ---
-        if (isInFocus && !currentFocusState) {
-            // === Transitioning INTO Focus ===
-            currentFocusState = true;
-            updatePopupState('Focus Active');
-            console.log("Transitioning INTO focus mode.");
-            await updateBlockingRules(true); // Apply DNR rules
-            await checkExistingTabs();       // Check currently open tabs
-        } else if (!isInFocus && currentFocusState) {
-            // === Transitioning OUT OF Focus ===
-            currentFocusState = false;
-            updatePopupState('Focus Inactive');
-            console.log("Transitioning OUT OF focus mode.");
-            await updateBlockingRules(false); // Remove DNR rules
-        } else if (isInFocus && currentFocusState) {
-            // === Still IN Focus ===
-            // Optional: Periodically check active tab as a fallback?
-            // The onActivated listener is generally better for this.
-            // If needed:
-            // const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
-            // if (activeTabs[0] && activeTabs[0].id && activeTabs[0].url) {
-            //     checkAndBlockTabIfNeeded(activeTabs[0].id, activeTabs[0].url);
-            // }
-             console.log("Still in focus mode.");
-             // Re-apply DNR rules just in case they were somehow cleared externally
-             // (might be overkill, could be removed if performance is an issue)
-             await updateBlockingRules(true);
         } else {
-            // === Still OUT of Focus ===
-             console.log("Still out of focus mode.");
-             // Ensure DNR rules are removed (safety check)
-             await updateBlockingRules(false);
+             // If only one part (like 'localhost'), it's not a typical block target? Return null or hostname?
+             // Let's return null as we expect public domains.
+             return null;
         }
+
+    } catch (e) {
+        console.error(`Error parsing domain input: ${urlInput}`, e);
+        return null; // Invalid URL input
+    }
+}
+
+
+// Loads state from storage and updates global variables
+async function loadAndUpdateState() {
+    console.log("loadAndUpdateState: Loading settings from storage...");
+    try {
+        const data = await chrome.storage.sync.get([
+            'sitesConfig',
+            'globalBlockMessage',
+            'isEnabled'
+        ]);
+
+        extensionIsEnabled = data.isEnabled === undefined ? true : data.isEnabled;
+
+        // Process sitesConfig: use defaults if not found, ensure domains are processed
+        const rawSitesConfig = data.sitesConfig || defaultSitesConfigForBG;
+        currentSitesConfig = rawSitesConfig.map(item => ({
+            domain: extractDomain(item.domain),
+            message: item.message || null // Ensure message is null if empty/undefined
+        })).filter(item => item.domain); // Filter out any items where domain processing failed
+
+        currentBlockedDomains = currentSitesConfig.map(item => item.domain); // Update derived list
+
+        currentGlobalBlockMessage = data.globalBlockMessage || defaultGlobalMessageForBG;
+        redirectUrl = chrome.runtime.getURL('blocked.html');
+
+        console.log("State loaded/updated. Enabled:", extensionIsEnabled, "Config Count:", currentSitesConfig.length, "Global Msg:", currentGlobalBlockMessage);
 
     } catch (error) {
-        console.error('Error during calendar/blocking check:', error);
-        // On error, assume not in focus and try to clear rules
-        if (currentFocusState) {
-            currentFocusState = false;
-            await updateBlockingRules(false);
-        }
-        updatePopupState('Error');
-    } finally {
-        // Ensure next check is scheduled regardless of outcome (unless disabled)
-        const currentIsEnabled = await chrome.storage.sync.get('isEnabled'); // Re-fetch in case it changed during async ops
-        if (currentIsEnabled.isEnabled !== false) {
-             scheduleNextCheck(); // Schedule the *next* check after this one finishes
-        } else {
-            console.log("Extension disabled, not scheduling next check.");
-            chrome.alarms.clear(CALENDAR_CHECK_ALARM); // Explicitly clear alarm if disabled
-        }
+        console.error("Error loading state from storage:", error);
+        // Apply defaults on error to prevent broken state
+        extensionIsEnabled = true;
+        currentSitesConfig = defaultSitesConfigForBG.map(item => ({ domain: extractDomain(item.domain), message: item.message })).filter(i => i.domain);
+        currentBlockedDomains = currentSitesConfig.map(item => item.domain);
+        currentGlobalBlockMessage = defaultGlobalMessageForBG;
+        redirectUrl = chrome.runtime.getURL('blocked.html');
+        console.log("Applied default state due to loading error.");
     }
 }
 
-
+// Gets OAuth token, prompting user if necessary (interactive=true)
 async function getAuthToken(interactive) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
         chrome.identity.getAuthToken({ interactive: interactive }, (token) => {
             if (chrome.runtime.lastError) {
-                // Log specific errors but resolve null for flow control
+                // Log specific common errors but resolve null for flow control
                 if (chrome.runtime.lastError.message.includes("OAuth2 not granted")) {
-                   console.warn('getAuthToken: OAuth2 not granted or revoked.');
+                    console.warn('getAuthToken: OAuth2 not granted or revoked.');
+                } else if (chrome.runtime.lastError.message.includes("User interaction required")) {
+                     console.warn('getAuthToken: User interaction required for authorization.');
                 } else {
-                   console.error('getAuthToken Error:', chrome.runtime.lastError.message);
+                    console.error('getAuthToken Error:', chrome.runtime.lastError.message);
                 }
-                resolve(null);
+                resolve(null); // Indicate token acquisition failed
             } else {
-                resolve(token);
+                resolve(token); // Success
             }
         });
     });
 }
 
+// Fetches calendar events around 'now' and checks if a focus event is active
 async function isCurrentlyInFocusEvent(token, focusKeyword) {
-    // (Keep this function as before - fetches events around 'now')
     const now = new Date();
-    const timeMin = now.toISOString();
-    const timeMax = new Date(now.getTime() + 60 * 1000).toISOString(); // Check events starting very soon
-    const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime&maxResults=10&q=${encodeURIComponent(focusKeyword)}`;
+    // Look slightly back and forward to catch events starting/ending around now
+    const timeMin = new Date(now.getTime() - 2 * 60 * 1000).toISOString(); // 2 minutes ago
+    const timeMax = new Date(now.getTime() + 2 * 60 * 1000).toISOString(); // 2 minutes ahead
+    const safeFocusKeyword = focusKeyword || defaultFocusKeyword;
+    const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime&maxResults=10&q=${encodeURIComponent(safeFocusKeyword)}`;
+
+    console.log(`Checking calendar with keyword: "${safeFocusKeyword}"`);
 
     try {
         const response = await fetch(url, {
             headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
         });
+
         if (!response.ok) {
-             if (response.status === 401) {
-                chrome.identity.removeCachedAuthToken({ token: token }, () => {});
-                console.warn('Received 401 Unauthorized. Token potentially expired/revoked.');
-             } else if (response.status === 403) {
-                 console.error(`Received 403 Forbidden. Ensure Google Calendar API is enabled in Cloud Console: https://console.cloud.google.com/apis/library/calendar-json.googleapis.com`);
-             }
-             throw new Error(`Google Calendar API Error: ${response.status} ${response.statusText}`);
+            // Handle specific errors
+            if (response.status === 401) { // Unauthorized
+                console.warn('Received 401 Unauthorized. Token might be expired/revoked. Removing cached token.');
+                // Remove the potentially invalid token
+                chrome.identity.removeCachedAuthToken({ token: token }, () => {
+                     console.log("Cached auth token removed due to 401.");
+                     // Optional: Try to inform options page to update status?
+                     chrome.runtime.sendMessage({ action: "updateOptionsAuthStatus" }).catch(e => {});
+                });
+            } else if (response.status === 403) { // Forbidden
+                console.error(`Received 403 Forbidden. Ensure Google Calendar API is enabled: https://console.cloud.google.com/apis/library/calendar-json.googleapis.com`);
+            } else {
+                console.error(`Google Calendar API Error: ${response.status} ${response.statusText}`);
+            }
+             // Don't throw here, just return false (assume not in focus on error)
+            return false;
         }
+
         const data = await response.json();
+        console.log("Fetched events:", data.items ? data.items.length : 0);
+
         if (data.items && data.items.length > 0) {
             const currentTime = now.getTime();
             for (const event of data.items) {
-                if (event.summary && event.summary.toLowerCase().includes(focusKeyword.toLowerCase())) {
+                 // Double-check keyword presence as 'q' param can be fuzzy
+                if (event.summary && event.summary.toLowerCase().includes(safeFocusKeyword.toLowerCase())) {
+                    // Handle both dateTime (specific time) and date (all-day) events
                     const start = new Date(event.start.dateTime || event.start.date).getTime();
-                    const end = new Date(event.end.dateTime || event.end.date).getTime();
+                    // For all-day events, the end date is exclusive (start of next day)
+                    let end;
+                    if (event.end.dateTime) {
+                        end = new Date(event.end.dateTime).getTime();
+                    } else {
+                         // All-day event ends at midnight *at the start* of the given end date
+                         const endDate = new Date(event.end.date);
+                         end = endDate.getTime(); // Time is 00:00:00 on the end date
+                    }
+
+                    console.log(`Event: "${event.summary}", Start: ${new Date(start)}, End: ${new Date(end)}, Now: ${now}`);
+
+                    // Check if 'now' is within the event's time range (inclusive start, exclusive end)
                     if (currentTime >= start && currentTime < end) {
-                        console.log(`Focus event found and active: "${event.summary}"`);
-                        return true;
+                        console.log(`---> Focus event found and ACTIVE: "${event.summary}"`);
+                        return true; // Currently in a matching focus event
                     }
                 }
             }
         }
+        console.log('No active focus event found matching the keyword and time.');
         return false; // No active matching event found
     } catch (error) {
+        // Catch fetch errors or other exceptions
         console.error('Error fetching/processing calendar events:', error);
         return false; // Assume not in focus on error
     }
 }
 
-// --- Blocking Rules Management (DeclarativeNetRequest) ---
-// (Keep the updateBlockingRules function using integer IDs as finalized before)
+// Updates Declarative Net Request rules
 async function updateBlockingRules(shouldBlock) {
-  const allSessionRules = await chrome.declarativeNetRequest.getSessionRules();
-  const existingFocusRuleIds = allSessionRules
-    .filter(rule => rule.id >= FOCUS_RULE_ID_START && rule.id <= FOCUS_RULE_ID_END)
-    .map(rule => rule.id);
+    const logPrefix = "[DNR Rules]";
+    try {
+        const allSessionRules = await chrome.declarativeNetRequest.getSessionRules();
+        const existingFocusRuleIds = allSessionRules
+            .filter(rule => rule.id >= FOCUS_RULE_ID_START && rule.id <= FOCUS_RULE_ID_END)
+            .map(rule => rule.id);
 
-  const rulesToAdd = [];
-  if (shouldBlock && currentBlockedSites.length > 0) { // Use cached/processed domains
-    console.log('Setting up DNR rules for:', currentBlockedSites);
+        const rulesToAdd = [];
+        const domainsToBlock = currentBlockedDomains; // Use the cached, processed list
 
-    currentBlockedSites.forEach((domain, index) => { // Iterate processed domains
-      if (index >= MAX_BLOCKED_SITES) return; // Skip if exceeding limit
-      const ruleId = FOCUS_RULE_ID_START + index;
-      rulesToAdd.push({
-        id: ruleId,
-        priority: RULE_PRIORITY,
-        action: { type: 'redirect', redirect: { url: redirectUrl } },
-        condition: { urlFilter: `*://*.${domain}/*`, resourceTypes: ['main_frame'] }
-      });
-    });
-  }
+        if (shouldBlock && extensionIsEnabled && domainsToBlock.length > 0) {
+            console.log(`${logPrefix} Setting up rules for ${domainsToBlock.length} domains:`, domainsToBlock);
+            if (!redirectUrl) redirectUrl = chrome.runtime.getURL('blocked.html'); // Ensure redirect URL is set
 
-  // Apply changes
-  console.log("DNR Rules to Add:", rulesToAdd.map(r => r.id));
-  console.log("DNR Rule IDs to Remove:", existingFocusRuleIds);
+            const baseRedirectUrl = redirectUrl.split('?')[0]; // Ensure we use the base URL for DNR
 
-  try {
-     await chrome.declarativeNetRequest.updateSessionRules({
-       removeRuleIds: existingFocusRuleIds,
-       addRules: rulesToAdd
-     });
-     console.log('DNR blocking rules updated successfully.');
-   } catch (error) {
-     console.error('Failed to update DNR blocking rules:', error);
-     if (error.message.includes('MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES')) {
-         console.error("Exceeded the maximum number of DNR rules allowed by Chrome.");
-     }
-   }
+            domainsToBlock.forEach((domain, index) => {
+                if (index >= MAX_BLOCKED_SITES) {
+                    console.warn(`${logPrefix} Max rule limit (${MAX_BLOCKED_SITES}) reached, skipping domain: ${domain}`);
+                    return;
+                }
+                const ruleId = FOCUS_RULE_ID_START + index;
+                rulesToAdd.push({
+                    id: ruleId,
+                    priority: RULE_PRIORITY,
+                    action: { type: 'redirect', redirect: { url: baseRedirectUrl } }, // Redirect to base blocked.html
+                    condition: {
+                        // Apply to the domain and all subdomains for main frame requests
+                        // Exclude the blocked page itself to prevent loops
+                        urlFilter: `*://${domain}/*`, // Match domain without www
+                        excludedInitiatorDomains: [chrome.runtime.id], // Don't block if initiated by the extension
+                        resourceTypes: ['main_frame']
+                    }
+                });
+                // Also block www explicitly if needed, though urlFilter *should* cover it.
+                // Consider adding `*://www.${domain}/*` if simple filter isn't catching www reliably.
+            });
+        } else {
+            if (!extensionIsEnabled) console.log(`${logPrefix} Extension disabled, removing rules.`);
+            else if (!shouldBlock) console.log(`${logPrefix} Focus inactive, removing rules.`);
+            else console.log(`${logPrefix} No domains to block, removing rules.`);
+        }
+
+        // Apply changes atomically
+        console.log(`${logPrefix} Rules to Add:`, rulesToAdd.map(r => r.id));
+        console.log(`${logPrefix} Rule IDs to Remove:`, existingFocusRuleIds);
+
+        await chrome.declarativeNetRequest.updateSessionRules({
+            removeRuleIds: existingFocusRuleIds,
+            addRules: rulesToAdd
+        });
+        console.log(`${logPrefix} Rules updated successfully.`);
+
+    } catch (error) {
+        console.error(`${logPrefix} FAILED to update rules:`, error);
+        // Check for specific errors like rule limits
+        if (error.message.includes('MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES')) {
+            console.error(`${logPrefix} Exceeded the maximum number of rules allowed by Chrome.`);
+            // Consider notifying the user via popup or options page state
+            updatePopupState('Error: Rule Limit');
+        }
+    }
 }
 
-// Helper to check if a URL matches the blocked list
-function isUrlBlocked(url, blockedSiteDomains) {
-    if (!url || !url.startsWith('http')) return false;
+// Checks if a given URL matches the blocked site config
+// Returns: false (not blocked), true (blocked, use global msg), string (blocked, use custom msg)
+function isUrlBlocked(url, sitesConfigToCheck) {
+    if (!url || (!url.startsWith('http:') && !url.startsWith('https://'))) {
+         return false; // Ignore non-http(s) URLs
+    }
     try {
         const currentUrl = new URL(url);
-        const currentHostname = currentUrl.hostname; // e.g., www.youtube.com or music.youtube.com
-        for (const blockedDomain of blockedSiteDomains) {
+        // Normalize hostname (lowercase)
+        const currentHostname = currentUrl.hostname.toLowerCase();
+
+        for (const item of sitesConfigToCheck) {
+            const blockedDomain = item.domain.toLowerCase(); // Domain stored should already be processed/lowercase
+            // Check if the current hostname IS the blocked domain OR ends with ".<blockeddomain>"
             if (currentHostname === blockedDomain || currentHostname.endsWith('.' + blockedDomain)) {
-                return true; // Matches domain or subdomain
+                // Match found! Return the message if it's a non-empty string, otherwise true.
+                return (item.message && item.message.trim() !== '') ? item.message : true;
             }
         }
     } catch (e) {
         // console.warn("Could not parse URL in isUrlBlocked:", url, e); // Can be noisy
-        return false;
+        return false; // Invalid URL parsing
     }
-    return false;
+    return false; // No match found
 }
 
+// Redirects a tab if it matches a blocked site during focus mode
+async function checkAndBlockTabIfNeeded(tabId, url) {
+    if (!extensionIsEnabled || !currentFocusState) return; // Only check if enabled and in focus
 
-// Helper to extract main domain part for DNR rules and storage
-function extractDomain(urlInput) {
-    // (Keep this function as before)
-    let domain = urlInput.trim();
-    if (!domain) return null;
-    if (!domain.startsWith('http://') && !domain.startsWith('https://')) {
-        domain = 'http://' + domain;
+    const baseRedirectUrl = redirectUrl ? redirectUrl.split('?')[0] : '';
+    if (!url || !baseRedirectUrl || url.startsWith(baseRedirectUrl)) {
+        // Ignore empty URLs, cases before redirect URL is set, or already blocked tabs
+        return;
     }
-    try {
-        const url = new URL(domain);
-        let hostname = url.hostname;
-        if (hostname.startsWith('www.')) {
-            hostname = hostname.substring(4);
+
+    const blockResult = isUrlBlocked(url, currentSitesConfig); // Check against current config
+
+    if (blockResult !== false) { // If it IS blocked (true or message string)
+        let finalMessage;
+        if (typeof blockResult === 'string') {
+            finalMessage = blockResult; // Use specific message
+        } else {
+            finalMessage = currentGlobalBlockMessage || defaultGlobalMessageForBG; // Use global fallback
         }
-        // We now store just the base domain (e.g., youtube.com)
-        // Let's refine this slightly to handle cases like 'google.co.uk' correctly
-        const parts = hostname.split('.');
-        // Keep the last two parts generally, unless it's a known TLD structure like co.uk
-        if (parts.length > 2 && ['co', 'com', 'org', 'net', 'gov', 'ac'].includes(parts[parts.length - 2])) {
-             // Handle cases like 'co.uk', 'com.au' - keep 3 parts
-             hostname = parts.slice(-3).join('.');
-        } else if (parts.length > 1) {
-             // Standard case like 'google.com', 'youtube.com' - keep 2 parts
-             hostname = parts.slice(-2).join('.');
-        } // If only one part or invalid, hostname remains as is or URL parse fails
 
-        if (!hostname.includes('.')) return null; // Basic validation
-        return hostname;
-    } catch (e) {
-        console.error(`Error parsing domain: ${urlInput}`, e);
-        return null;
+        // Encode the message and create the target URL
+        const encodedMessage = encodeURIComponent(finalMessage);
+        const targetUrl = `${baseRedirectUrl}?message=${encodedMessage}`; // Add message as query param
+
+        console.log(`[Tab Blocker] BLOCKING Tab: ${tabId}, URL: ${url}. Redirecting...`);
+        try {
+            await chrome.tabs.update(tabId, { url: targetUrl });
+        } catch (error) {
+            // Ignore common errors when tab is closed or inaccessible
+            if (!error.message.includes("No tab with id") && !error.message.includes("Cannot access") && !error.message.includes("Invalid tab ID")) {
+                console.error(`[Tab Blocker] Error updating tab ${tabId} to ${targetUrl}:`, error);
+            } else {
+                 console.log(`[Tab Blocker] Ignored error updating tab ${tabId} (likely closed): ${error.message}`);
+            }
+        }
     }
 }
 
-// --- Popup State ---
-function updatePopupState(statusText) {
-    chrome.storage.local.set({ extensionStatus: statusText });
+// Checks all currently open tabs when focus mode starts
+async function checkExistingTabs() {
+    if (!extensionIsEnabled || !currentFocusState) return; // Safety check
+
+    console.log("[Tab Blocker] Focus mode started. Checking all existing tabs...");
+    try {
+        const tabs = await chrome.tabs.query({}); // Query all tabs
+        console.log(`[Tab Blocker] Found ${tabs.length} tabs to check.`);
+        for (const tab of tabs) {
+            if (tab.id && tab.url) { // Ensure tab has ID and URL
+                // Check and block, don't wait for each one to finish updating
+                 checkAndBlockTabIfNeeded(tab.id, tab.url);
+                 // Add a tiny delay to prevent overwhelming the browser/API if many tabs
+                 await new Promise(resolve => setTimeout(resolve, 15));
+            }
+        }
+        console.log("[Tab Blocker] Finished checking existing tabs.");
+    } catch (error) {
+        console.error("[Tab Blocker] Error querying or checking existing tabs:", error);
+    }
 }
+
+
+// Schedules the next calendar check using chrome.alarms
+function scheduleNextCheck() {
+    if (!extensionIsEnabled) {
+         console.log("Scheduling skipped: Extension is disabled.");
+         chrome.alarms.clear(CALENDAR_CHECK_ALARM); // Ensure alarm is cleared if disabled
+         return;
+    }
+    // Use 'periodInMinutes' for repeating alarm
+    const period = 5; // Check every 5 minutes
+    chrome.alarms.create(CALENDAR_CHECK_ALARM, {
+        delayInMinutes: period, // Delay before the *first* run after this call
+        periodInMinutes: period // Repeat interval
+    });
+    console.log(`Scheduled next calendar check alarm (runs in ${period} mins, repeats every ${period} mins).`);
+}
+
+// Updates the status text displayed in the browser action popup
+function updatePopupState(statusText) {
+    // Use local storage as it's faster for popup state
+    chrome.storage.local.set({ extensionStatus: statusText }).catch(error => {
+        console.warn("Error setting popup state:", error);
+    });
+    // Optionally: Update icon based on state (requires 'action' API)
+    // Example: Change icon based on focus state
+    // chrome.action.setIcon({ path: currentFocusState ? "icons/icon48_active.png" : "icons/icon48.png" });
+}
+
+
+// --- Main Calendar Checking and State Logic ---
+async function checkCalendarAndSetBlocking() {
+    console.log("--- Running CheckCalendarAndSetBlocking ---");
+
+    // Ensure current enabled state is loaded
+    await loadAndUpdateState(); // Reloads state including extensionIsEnabled
+
+    if (!extensionIsEnabled) {
+        console.log("Check skipped: Extension is disabled.");
+        if (currentFocusState) { // If it *was* in focus, ensure cleanup
+             console.log("Transitioning OUT OF focus due to disabling.");
+             currentFocusState = false;
+             await updateBlockingRules(false); // Remove DNR rules
+             updatePopupState('Disabled');
+        }
+         // Ensure alarm is cleared if disabled here too
+         chrome.alarms.clear(CALENDAR_CHECK_ALARM);
+        return; // Stop processing if disabled
+    }
+
+     if (!redirectUrl) {
+        console.warn("Redirect URL not set yet, cannot proceed with check.");
+        return; // Cannot block tabs or set rules without it
+    }
+
+    let isInFocus = false; // Assume not in focus by default for this check cycle
+    try {
+        console.log('Checking authorization token...');
+        const token = await getAuthToken(false); // false = don't prompt interactively
+
+        if (!token) {
+            console.warn('Auth token not available. Needs authorization.');
+            if (currentFocusState) { // If it *was* in focus, transition out
+                console.log("Transitioning OUT OF focus due to missing auth.");
+                currentFocusState = false;
+                await updateBlockingRules(false); // Remove DNR rules
+            }
+            updatePopupState('Auth Required');
+            return; // Stop calendar check if not authorized
+        }
+
+        // Get focus keyword from storage for this check
+        const { focusKeyword } = await chrome.storage.sync.get('focusKeyword');
+        const keywordToCheck = focusKeyword || defaultFocusKeyword;
+
+        // Check calendar API
+        console.log('Checking Google Calendar...');
+        isInFocus = await isCurrentlyInFocusEvent(token, keywordToCheck);
+
+        // --- State Transition Logic ---
+        if (isInFocus && !currentFocusState) {
+            // === Transitioning INTO Focus ===
+            console.log(">>> Transitioning INTO focus mode.");
+            currentFocusState = true;
+            updatePopupState('Focus Active');
+            await updateBlockingRules(true); // Apply DNR rules FIRST
+            await checkExistingTabs();       // THEN check/block currently open tabs
+        } else if (!isInFocus && currentFocusState) {
+            // === Transitioning OUT OF Focus ===
+            console.log("<<< Transitioning OUT OF focus mode.");
+            currentFocusState = false;
+            updatePopupState('Focus Inactive');
+            await updateBlockingRules(false); // Remove DNR rules
+        } else if (isInFocus /* && currentFocusState */) {
+            // === Still IN Focus ===
+             console.log("--- Still IN focus mode.");
+             updatePopupState('Focus Active'); // Keep popup state updated
+             // Ensure rules are still applied (safety net)
+             await updateBlockingRules(true);
+             // Optional: Re-check active tab? Usually handled by listeners.
+             // try {
+             //    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+             //    if (activeTab?.id && activeTab?.url) {
+             //       checkAndBlockTabIfNeeded(activeTab.id, activeTab.url);
+             //    }
+             // } catch(e) { console.warn("Error checking active tab:", e); }
+        } else /* (!isInFocus && !currentFocusState) */ {
+            // === Still OUT of Focus ===
+             console.log("--- Still OUT of focus mode.");
+             updatePopupState('Focus Inactive'); // Keep popup state updated
+             // Ensure rules remain removed (safety net)
+             await updateBlockingRules(false);
+        }
+
+    } catch (error) {
+        console.error('!!! Error during main check cycle:', error);
+        // On unexpected error, assume not in focus and try to clear rules
+        if (currentFocusState) {
+            currentFocusState = false;
+            await updateBlockingRules(false); // Attempt cleanup
+        }
+        updatePopupState('Error');
+    }
+    // Note: scheduleNextCheck() is handled by the alarm's 'periodInMinutes' setting
+    console.log("--- Finished CheckCalendarAndSetBlocking ---");
+}
+
+
+// --- Event Listeners ---
+
+// Extension Installation/Update
+chrome.runtime.onInstalled.addListener(async (details) => {
+    console.log(`Extension ${details.reason}. Previous version: ${details.previousVersion}`);
+
+    await loadAndUpdateState(); // Load initial state
+
+    if (details.reason === 'install') {
+        console.log("First install setup.");
+        // Set default settings ONLY on first install
+        await chrome.storage.sync.set({
+            sitesConfig: defaultSitesConfigForBG.map(item => ({ domain: extractDomain(item.domain) || item.domain, message: item.message})),
+            globalBlockMessage: defaultGlobalMessageForBG,
+            focusKeyword: defaultFocusKeyword,
+            isEnabled: true
+        });
+         console.log("Default settings applied.");
+         // Open options page on first install?
+         // chrome.runtime.openOptionsPage();
+    }
+
+    // Always run an initial check after install/update/load
+    // Use a short delay to allow system to settle
+    setTimeout(checkCalendarAndSetBlocking, 2000); // Run initial check
+    scheduleNextCheck(); // Set up the repeating alarm
+});
+
+
+// Alarm Listener (Triggers periodic checks)
+chrome.alarms.onAlarm.addListener(alarm => {
+    if (alarm.name === CALENDAR_CHECK_ALARM) {
+        console.log(`Alarm "${alarm.name}" triggered.`);
+        checkCalendarAndSetBlocking();
+    }
+});
+
+// Storage Change Listener (Reacts to settings changes)
+chrome.storage.onChanged.addListener(async (changes, namespace) => {
+    if (namespace === 'sync') {
+        console.log('Sync storage changed:', Object.keys(changes));
+        let needsFullCheck = false;
+        let configOrEnableChanged = false;
+
+        // Check which settings changed
+        if (changes.sitesConfig || changes.globalBlockMessage) {
+            console.log('Site config or global message changed in storage.');
+            configOrEnableChanged = true;
+        }
+        if (changes.focusKeyword) {
+            console.log('Focus keyword changed in storage.');
+            needsFullCheck = true; // Need to check calendar again with new keyword
+        }
+        if (changes.isEnabled !== undefined) {
+             console.log('isEnabled changed in storage to:', changes.isEnabled.newValue);
+             configOrEnableChanged = true; // Treat enable/disable like a config change for checks
+        }
+
+        // Reload state from storage to update global variables
+        await loadAndUpdateState();
+
+        // If disabled, ensure cleanup happens immediately
+        if (!extensionIsEnabled) {
+             console.log("Extension is now disabled. Cleaning up state.");
+             if (currentFocusState) { // If was focused, transition out
+                 currentFocusState = false;
+                 await updateBlockingRules(false);
+             }
+             updatePopupState('Disabled');
+             chrome.alarms.clear(CALENDAR_CHECK_ALARM); // Stop alarms
+             return; // Don't proceed further if disabled
+        } else if (changes.isEnabled?.newValue === true && changes.isEnabled?.oldValue === false) {
+            // If just re-enabled, trigger a full check and reschedule alarm
+            console.log("Extension re-enabled. Triggering check and rescheduling alarm.");
+            needsFullCheck = true;
+            scheduleNextCheck();
+        }
+
+
+        // If site config changed, or extension was enabled/disabled, update rules and check tabs
+        if (configOrEnableChanged) {
+             console.log("Config/Enable changed, updating DNR rules based on current focus state:", currentFocusState);
+             await updateBlockingRules(currentFocusState); // Update DNR rules based on *current* focus state
+             if (currentFocusState) {
+                 console.log("Checking existing tabs due to config change while focus active.");
+                 await checkExistingTabs(); // Re-check tabs if config changed while focus active
+             }
+        }
+
+        // If keyword changed or just re-enabled, trigger a full calendar check
+        if (needsFullCheck) {
+            console.log('Triggering full re-check due to keyword change or re-enabling.');
+            // Don't need to clear/reschedule alarm here, the check runs immediately,
+            // and the periodic alarm continues unless the extension was disabled.
+            checkCalendarAndSetBlocking();
+        }
+    }
+});
+
+
+// Tab Update Listener (URL change)
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    // Check only when URL changes and focus mode is active and extension enabled
+    // Use changeInfo.url as it's the most reliable indicator of the *new* URL
+    if (extensionIsEnabled && currentFocusState && changeInfo.url) {
+         // Avoid acting on sub-frame navigations if possible, though main_frame in DNR helps
+         if (changeInfo.status === 'loading' || changeInfo.url !== tab.url) { // Check on loading or definite URL change
+             console.log(`[Tab Listener] Tab updated: ${tabId}, New URL detected: ${changeInfo.url}`);
+             checkAndBlockTabIfNeeded(tabId, changeInfo.url);
+         }
+    }
+});
+
+// Tab Activation Listener (Switching Tabs)
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+    if (extensionIsEnabled && currentFocusState) {
+        console.log(`[Tab Listener] Tab activated: ${activeInfo.tabId}`);
+        try {
+            // Get the details of the activated tab
+            const tab = await chrome.tabs.get(activeInfo.tabId);
+            if (tab && tab.url) {
+                 // Check if the activated tab needs blocking
+                checkAndBlockTabIfNeeded(tab.id, tab.url);
+            }
+        } catch (error) {
+            // Handle cases where the tab might be closed before we get it, or permission errors
+            if (!error.message.includes("No tab with id") && !error.message.includes("Cannot access") && !error.message.includes("Invalid tab ID")) {
+                 console.warn(`[Tab Listener] Error getting activated tab ${activeInfo.tabId}:`, error);
+            }
+        }
+    }
+});
+
+// Message Listener (e.g., from Options Page)
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    console.log(`Message received from ${sender.tab ? 'tab ' + sender.tab.id : 'extension'}:`, request);
+    if (request.action === "settingsUpdated") {
+        console.log("Received 'settingsUpdated' message. Triggering state reload and check.");
+        // Reload state immediately and trigger a check
+        loadAndUpdateState().then(() => {
+            checkCalendarAndSetBlocking();
+        });
+        // Indicate async response possible, though we don't send one here
+        return true;
+    }
+     // Respond to request for auth status from options page
+     if (request.action === "getAuthStatus") {
+         getAuthToken(false).then(token => {
+             sendResponse({ isAuthorized: !!token });
+         });
+         return true; // Indicate async response
+     }
+     // Respond to request from options page to trigger manual check
+     if (request.action === "triggerManualCheck") {
+          console.log("Manual check triggered via message.");
+          checkCalendarAndSetBlocking().then(() => {
+                sendResponse({ status: "Check initiated." });
+          }).catch(e => {
+                 sendResponse({ status: "Check failed.", error: e.message });
+          });
+          return true; // Indicate async response
+     }
+
+     // Default: Ignore unknown messages
+     console.log("Unknown message action:", request.action);
+     // Return false or undefined if not handling the message or not responding async
+});
+
+
+// --- Initial Load ---
+console.log("Background script executing/restarting.");
+// Load state when the script starts (essential for service workers)
+loadAndUpdateState().then(() => {
+     // After loading state, set up the initial check and alarm if not already handled by onInstalled
+     // Check if an alarm already exists
+     chrome.alarms.get(CALENDAR_CHECK_ALARM, (existingAlarm) => {
+         if (!existingAlarm) {
+             console.log("No existing alarm found on startup. Scheduling initial check and alarm.");
+             setTimeout(checkCalendarAndSetBlocking, 3000); // Initial check after startup
+             scheduleNextCheck(); // Setup repeating alarm
+         } else {
+              console.log("Alarm already exists on startup. Performing immediate check.");
+              // Alarm exists, perhaps run an immediate check anyway to ensure state is correct
+              setTimeout(checkCalendarAndSetBlocking, 1000);
+         }
+     });
+
+});

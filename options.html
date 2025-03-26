@@ -11,12 +11,15 @@
         #status { margin-top: 15px; font-weight: bold; }
         .setting-group { margin-bottom: 20px; border-bottom: 1px solid #ccc; padding-bottom: 15px; }
          #enable-toggle { margin-left: 10px; }
+         textarea { width: 95%; min-height: 100px; font-size: 1em; margin-top: 5px; padding: 5px;}
+        .help-text { font-size: 0.9em; color: #555; margin-top: 3px; }
     </style>
 </head>
 <body>
     <h1>Calendar Focus Blocker Options</h1>
 
-    <div class="setting-group">
+    <!-- ...(Enable toggle, Authorization)... -->
+     <div class="setting-group">
         <label>Enable Extension:</label>
         <input type="checkbox" id="enable-toggle">
     </div>
@@ -26,24 +29,32 @@
         <label for="auth-status">Google Calendar Authorization:</label>
         <span id="auth-status">Checking...</span>
         <button id="authorize">Authorize / Re-authorize</button>
-        <p><small>Requires read-only access to your primary calendar.</small></p>
+        <p class="help-text"><small>Requires read-only access to your primary calendar.</small></p>
     </div>
 
     <div class="setting-group">
         <label for="focusKeyword">Focus Event Keyword:</label>
         <input type="text" id="focusKeyword">
-        <p><small>Events with this text in their title will trigger blocking (e.g., "[Focus]", "Deep Work"). Case-insensitive.</small></p>
+        <p class="help-text"><small>Events with this text in their title trigger blocking (e.g., "[Focus]"). Case-insensitive.</small></p>
     </div>
 
+    <!-- MODIFIED SECTION for Sites and Messages -->
     <div class="setting-group">
-        <label for="blockedSites">Websites to Block (one per line):</label>
-        <textarea id="blockedSites"></textarea>
-        <p><small>Enter base domains like <code>youtube.com</code>, <code>facebook.com</code>. Subdomains (like <code>www.</code>) will also be blocked.</small></p>
+        <label for="sitesConfigInput">Blocked Websites & Custom Messages:</label>
+        <textarea id="sitesConfigInput" placeholder="e.g., youtube.com || Stop watching videos!
+facebook.com
+reddit.com || Focus time, no scrolling!"></textarea>
+        <p class="help-text">
+            Enter one website per line. Format: <code>domain.com</code> or <code>domain.com || Custom message for this site</code>.<br/>
+            If no custom message is provided after <code>||</code>, the global message below will be used.
+        </p>
     </div>
 
+    <!-- MODIFIED SECTION for Global Message -->
     <div class="setting-group">
-        <label for="customMessage">Custom Block Message:</label>
-        <textarea id="customMessage"></textarea>
+        <label for="globalBlockMessageInput">Global Block Message (Fallback):</label>
+        <textarea id="globalBlockMessageInput"></textarea>
+         <p class="help-text">This message is shown for blocked sites that don't have a specific custom message defined above.</p>
     </div>
 
     <button id="save">Save Settings</button>

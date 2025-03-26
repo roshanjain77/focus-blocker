@@ -1,32 +1,39 @@
+// --- Element References ---
 const enableToggle = document.getElementById('enable-toggle');
 const focusKeywordInput = document.getElementById('focusKeyword');
-const blockedSitesTextarea = document.getElementById('blockedSites');
-const customMessageTextarea = document.getElementById('customMessage');
+// ** NEW/RENAMED **
+const sitesConfigTextarea = document.getElementById('sitesConfigInput');
+const globalMessageTextarea = document.getElementById('globalBlockMessageInput');
 const saveButton = document.getElementById('save');
 const statusDiv = document.getElementById('status');
 const authorizeButton = document.getElementById('authorize');
 const authStatusSpan = document.getElementById('auth-status');
 
-// --- Authorization ---
-function checkAuthStatus() {
+// --- Defaults ---
+const defaultSitesConfig = [
+    { domain: "youtube.com", message: "Maybe watch this later?" },
+    { domain: "facebook.com", message: null },
+    { domain: "twitter.com", message: null },
+    { domain: "reddit.com", message: "Focus time! No endless scrolling." }
+];
+const defaultGlobalMessage = 'This site is blocked during your scheduled focus time.';
+const defaultFocusKeyword = '[Focus]';
+
+// --- Authorization (Keep as before) ---
+function checkAuthStatus() { /* ... no changes needed ... */
     authStatusSpan.textContent = 'Checking...';
     chrome.identity.getAuthToken({ interactive: false }, (token) => {
         if (chrome.runtime.lastError || !token) {
             authStatusSpan.textContent = 'Not Authorized';
             authStatusSpan.style.color = 'red';
-            console.log('Not authorized:', chrome.runtime.lastError?.message);
         } else {
             authStatusSpan.textContent = 'Authorized';
             authStatusSpan.style.color = 'green';
-             // Optional: Remove token if testing re-auth, then call checkAuthStatus() again
-            // chrome.identity.removeCachedAuthToken({ token: token }, () => checkAuthStatus());
         }
     });
 }
-
-authorizeButton.addEventListener('click', () => {
+authorizeButton.addEventListener('click', () => { /* ... no changes needed ... */
     authStatusSpan.textContent = 'Authorizing...';
-    // Request authorization interactively
     chrome.identity.getAuthToken({ interactive: true }, (token) => {
         if (chrome.runtime.lastError || !token) {
             authStatusSpan.textContent = 'Authorization Failed/Declined';
@@ -35,9 +42,7 @@ authorizeButton.addEventListener('click', () => {
         } else {
             authStatusSpan.textContent = 'Authorized Successfully!';
             authStatusSpan.style.color = 'green';
-            statusDiv.textContent = 'Authorization successful. You might need to save settings again if you changed them.';
-            // Maybe trigger a calendar check?
-            // chrome.runtime.sendMessage({ action: "checkCalendar" }); // If needed
+            statusDiv.textContent = 'Authorization successful.';
         }
     });
 });
@@ -45,50 +50,81 @@ authorizeButton.addEventListener('click', () => {
 
 // --- Load Settings ---
 function loadSettings() {
-    chrome.storage.sync.get(['blockedSites', 'customMessage', 'focusKeyword', 'isEnabled'], (data) => {
-        blockedSitesTextarea.value = (data.blockedSites || []).join('\n');
-        customMessageTextarea.value = data.customMessage || '';
-        focusKeywordInput.value = data.focusKeyword || '[Focus]';
-        enableToggle.checked = data.isEnabled === undefined ? true : data.isEnabled; // Default true
+    // ** MODIFIED: Use new keys 'sitesConfig', 'globalBlockMessage' **
+    chrome.storage.sync.get(['sitesConfig', 'globalBlockMessage', 'focusKeyword', 'isEnabled'], (data) => {
+        const config = data.sitesConfig || defaultSitesConfig;
+        const globalMessage = data.globalBlockMessage || defaultGlobalMessage;
+
+        // Format config object array back into textarea string
+        sitesConfigTextarea.value = config.map(item => {
+            return item.domain + (item.message ? ` || ${item.message}` : '');
+        }).join('\n');
+
+        globalMessageTextarea.value = globalMessage;
+        focusKeywordInput.value = data.focusKeyword || defaultFocusKeyword;
+        enableToggle.checked = data.isEnabled === undefined ? true : data.isEnabled;
     });
-    checkAuthStatus(); // Check auth status on load
+    checkAuthStatus();
 }
 
 // --- Save Settings ---
 saveButton.addEventListener('click', () => {
-    const sites = blockedSitesTextarea.value.split('\n').map(s => s.trim()).filter(Boolean); // Trim whitespace and remove empty lines
-    const message = customMessageTextarea.value;
+    const lines = sitesConfigTextarea.value.split('\n');
+    const newSitesConfig = [];
+
+    // ** MODIFIED: Parse the textarea format **
+    for (const line of lines) {
+        if (!line.trim()) continue; // Skip empty lines
+
+        const parts = line.split('||');
+        const domainInput = parts[0].trim();
+        const customMessage = parts.length > 1 ? parts[1].trim() : null;
+
+        // **Use the extractDomain helper (assuming it exists globally or import it)**
+        // If background.js handles extractDomain, we might need to simplify here
+        // or duplicate the logic if necessary. For now, let's assume basic trim.
+        // A robust solution would involve messaging the background script or duplicating.
+        // Simple version for options page: just use the trimmed input. Background validates.
+        const domain = domainInput; // Basic validation happens in background
+
+        if (domain) {
+            newSitesConfig.push({
+                domain: domain, // Store the raw input domain for now
+                message: customMessage || null // Store null if message is empty/missing
+            });
+        } else {
+            console.warn("Skipping invalid line in config:", line);
+        }
+    }
+
+    const newGlobalMessage = globalMessageTextarea.value.trim() || defaultGlobalMessage; // Ensure not empty
     const keyword = focusKeywordInput.value.trim();
     const enabled = enableToggle.checked;
 
+    // ** MODIFIED: Save using new keys **
     chrome.storage.sync.set({
-        blockedSites: sites,
-        customMessage: message,
+        sitesConfig: newSitesConfig,
+        globalBlockMessage: newGlobalMessage,
         focusKeyword: keyword,
         isEnabled: enabled
     }, () => {
-        statusDiv.textContent = 'Settings saved successfully!';
+        statusDiv.textContent = 'Settings saved!';
         statusDiv.style.color = 'green';
         setTimeout(() => { statusDiv.textContent = ''; }, 3000);
-
-        // Re-check auth status in case it changed somehow, though unlikely here
         checkAuthStatus();
 
-         // Optionally tell background script to re-check immediately after saving
-         chrome.alarms.clear('calendarCheckAlarm', (wasCleared) => {
-            chrome.runtime.getBackgroundPage( backgroundPage => {
-                if (backgroundPage && backgroundPage.checkCalendarAndSetBlocking) {
-                    backgroundPage.checkCalendarAndSetBlocking();
-                    backgroundPage.scheduleNextCheck(); // Make sure next check is scheduled
-                } else {
-                    console.warn("Could not directly call background functions. Relying on storage listener.");
-                     // Force a reload/restart of the background script *if absolutely necessary*, but avoid this normally
-                    // chrome.runtime.reload();
-                }
-            });
-        });
+        // Optionally trigger immediate background check (keep existing logic if desired)
+        chrome.runtime.sendMessage({ action: "settingsUpdated" }).catch(e => console.log("BG not listening? ", e)); // Inform background script
+
     });
 });
 
 // --- Initialize ---
 document.addEventListener('DOMContentLoaded', loadSettings);
+
+// Add listener for messages from background (optional, but good practice)
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === "updateOptionsAuthStatus") {
+        checkAuthStatus();
+    }
+});

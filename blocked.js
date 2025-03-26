@@ -1,16 +1,28 @@
 // blocked.js
 const messageElement = document.getElementById('block-message');
+const fallbackMessage = 'This site is blocked during your scheduled focus time.';
 
-chrome.storage.sync.get('customMessage', (data) => {
-  if (data.customMessage && data.customMessage.trim() !== '') {
-    // Use textContent to prevent potential HTML injection if message was manipulated
-    messageElement.textContent = data.customMessage;
-  } else {
-    // Fallback message if none is set or it's empty
-    messageElement.textContent = 'This site is blocked during your scheduled focus time.';
-  }
-}).catch(error => {
-    // Handle potential errors fetching from storage
-    console.error("Error loading custom message:", error);
-    messageElement.textContent = 'This site is blocked. Error loading custom message.';
-});
+try {
+    // Get URL parameters
+    const params = new URLSearchParams(window.location.search);
+    const encodedMessage = params.get('message'); // Get the 'message' parameter
+
+    if (encodedMessage) {
+        // Decode and display the message from the URL
+        const decodedMessage = decodeURIComponent(encodedMessage);
+        messageElement.textContent = decodedMessage;
+    } else {
+        // If message parameter is missing, show fallback
+        console.warn("Block page loaded without a 'message' URL parameter.");
+        messageElement.textContent = fallbackMessage;
+    }
+} catch (error) {
+    // Handle potential errors (e.g., URLSearchParams not supported - very unlikely)
+    console.error("Error processing block page message:", error);
+    messageElement.textContent = fallbackMessage; // Show fallback on error
+}
+
+// Optional: Add a title attribute for very long messages
+if (messageElement.textContent.length > 150) { // Example threshold
+    messageElement.title = messageElement.textContent;
+}
