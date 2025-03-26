@@ -76,32 +76,25 @@ function extractDomain(urlInput) {
 }
 
 
-// Loads state from storage and updates global variables
 async function loadAndUpdateState() {
-    console.log("loadAndUpdateState: Loading settings from storage...");
+    console.log("loadAndUpdateState: Loading settings...");
     try {
         const data = await chrome.storage.sync.get([
-            'sitesConfig',
-            'globalBlockMessage',
-            'isEnabled'
+            'sitesConfig', 'globalBlockMessage', 'isEnabled'
         ]);
-
         extensionIsEnabled = data.isEnabled === undefined ? true : data.isEnabled;
 
-        // Process sitesConfig: use defaults if not found, ensure domains are processed
         const rawSitesConfig = data.sitesConfig || defaultSitesConfigForBG;
+        // ** CRITICAL: Re-process and validate domains on load **
         currentSitesConfig = rawSitesConfig.map(item => ({
-            domain: extractDomain(item.domain),
-            message: item.message || null // Ensure message is null if empty/undefined
-        })).filter(item => item.domain); // Filter out any items where domain processing failed
+            domain: extractDomain(item.domain), // Use robust extraction/validation
+            message: item.message || null
+        })).filter(item => item.domain); // Filter out any entries with invalid domains
 
-        currentBlockedDomains = currentSitesConfig.map(item => item.domain); // Update derived list
-
+        currentBlockedDomains = currentSitesConfig.map(item => item.domain);
         currentGlobalBlockMessage = data.globalBlockMessage || defaultGlobalMessageForBG;
         redirectUrl = chrome.runtime.getURL('blocked.html');
-
-        console.log("State loaded/updated. Enabled:", extensionIsEnabled, "Config Count:", currentSitesConfig.length, "Global Msg:", currentGlobalBlockMessage);
-
+        console.log("State loaded/updated. Enabled:", extensionIsEnabled, "Valid Config Count:", currentSitesConfig.length);
     } catch (error) {
         console.error("Error loading state from storage:", error);
         // Apply defaults on error to prevent broken state
@@ -492,29 +485,22 @@ async function checkCalendarAndSetBlocking() {
 
 // Extension Installation/Update
 chrome.runtime.onInstalled.addListener(async (details) => {
-    console.log(`Extension ${details.reason}. Previous version: ${details.previousVersion}`);
-
-    await loadAndUpdateState(); // Load initial state
-
+    console.log(`Extension ${details.reason}.`);
     if (details.reason === 'install') {
-        console.log("First install setup.");
-        // Set default settings ONLY on first install
         await chrome.storage.sync.set({
-            sitesConfig: defaultSitesConfigForBG.map(item => ({ domain: extractDomain(item.domain) || item.domain, message: item.message})),
+             // Save defaults (validation happens on load anyway)
+            sitesConfig: defaultSitesConfigForBG,
             globalBlockMessage: defaultGlobalMessageForBG,
             focusKeyword: defaultFocusKeyword,
             isEnabled: true
         });
          console.log("Default settings applied.");
-         // Open options page on first install?
-         // chrome.runtime.openOptionsPage();
     }
-
-    // Always run an initial check after install/update/load
-    // Use a short delay to allow system to settle
-    setTimeout(checkCalendarAndSetBlocking, 2000); // Run initial check
-    scheduleNextCheck(); // Set up the repeating alarm
+    await loadAndUpdateState();
+    setTimeout(checkCalendarAndSetBlocking, 2000);
+    scheduleNextCheck();
 });
+
 
 
 // Alarm Listener (Triggers periodic checks)

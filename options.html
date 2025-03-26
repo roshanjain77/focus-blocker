@@ -2,63 +2,94 @@
 <html>
 <head>
     <title>Calendar Focus Blocker Options</title>
+    <meta charset="UTF-8">
     <style>
-        body { font-family: sans-serif; padding: 20px; max-width: 600px; margin: auto; }
+        body { font-family: sans-serif; padding: 20px; max-width: 700px; margin: auto; }
         label { display: block; margin-top: 15px; font-weight: bold; }
-        textarea { width: 95%; min-height: 100px; font-size: 1em; margin-top: 5px; padding: 5px;}
-        input[type="text"] { width: 95%; padding: 8px; font-size: 1em; margin-top: 5px; }
-        button { padding: 10px 15px; margin-top: 20px; cursor: pointer; font-size: 1em; }
+        input[type="text"], textarea { width: 98%; padding: 8px; font-size: 1em; margin-top: 5px; border: 1px solid #ccc; border-radius: 4px; }
+        textarea { min-height: 60px; /* Smaller default height for messages */ }
+        button { padding: 10px 15px; margin-top: 10px; cursor: pointer; font-size: 1em; border-radius: 4px; border: none; background-color: #4285f4; color: white; }
+        button:hover { background-color: #357ae8; }
+        button.delete-button { background-color: #db4437; margin-left: 10px; padding: 5px 10px; font-size: 0.9em; }
+        button.delete-button:hover { background-color: #c5372c; }
         #status { margin-top: 15px; font-weight: bold; }
-        .setting-group { margin-bottom: 20px; border-bottom: 1px solid #ccc; padding-bottom: 15px; }
-         #enable-toggle { margin-left: 10px; }
-         textarea { width: 95%; min-height: 100px; font-size: 1em; margin-top: 5px; padding: 5px;}
+        .setting-group { margin-bottom: 25px; border-bottom: 1px solid #eee; padding-bottom: 20px; }
         .help-text { font-size: 0.9em; color: #555; margin-top: 3px; }
+
+        /* Styles for the dynamic site list */
+        #sites-list { margin-top: 10px; }
+        .site-entry {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 15px;
+            background-color: #f9f9f9;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .site-entry-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .site-entry label { margin-top: 0; font-size: 0.95em; }
+        #add-site-button { background-color: #34a853; margin-top: 15px; }
+        #add-site-button:hover { background-color: #2c8f46; }
     </style>
 </head>
 <body>
     <h1>Calendar Focus Blocker Options</h1>
 
-    <!-- ...(Enable toggle, Authorization)... -->
+    <!-- Enable toggle, Authorization, Focus Keyword (Keep as before) -->
      <div class="setting-group">
         <label>Enable Extension:</label>
         <input type="checkbox" id="enable-toggle">
     </div>
-
-
     <div class="setting-group">
         <label for="auth-status">Google Calendar Authorization:</label>
         <span id="auth-status">Checking...</span>
         <button id="authorize">Authorize / Re-authorize</button>
         <p class="help-text"><small>Requires read-only access to your primary calendar.</small></p>
     </div>
-
     <div class="setting-group">
         <label for="focusKeyword">Focus Event Keyword:</label>
         <input type="text" id="focusKeyword">
-        <p class="help-text"><small>Events with this text in their title trigger blocking (e.g., "[Focus]"). Case-insensitive.</small></p>
+        <p class="help-text"><small>Events with this text trigger blocking (e.g., "[Focus]").</small></p>
     </div>
 
-    <!-- MODIFIED SECTION for Sites and Messages -->
+    <!-- == NEW DYNAMIC SITES UI == -->
     <div class="setting-group">
-        <label for="sitesConfigInput">Blocked Websites & Custom Messages:</label>
-        <textarea id="sitesConfigInput" placeholder="e.g., youtube.com || Stop watching videos!
-facebook.com
-reddit.com || Focus time, no scrolling!"></textarea>
-        <p class="help-text">
-            Enter one website per line. Format: <code>domain.com</code> or <code>domain.com || Custom message for this site</code>.<br/>
-            If no custom message is provided after <code>||</code>, the global message below will be used.
-        </p>
+        <label>Blocked Websites & Custom Messages</label>
+        <p class="help-text">Define sites to block and an optional custom HTML message for each. If no message is set, the global message below is used.</p>
+        <div id="sites-list">
+            <!-- Site entries will be loaded here by options.js -->
+        </div>
+        <button id="add-site-button">+ Add Site</button>
     </div>
+    <!-- ============================ -->
 
-    <!-- MODIFIED SECTION for Global Message -->
     <div class="setting-group">
-        <label for="globalBlockMessageInput">Global Block Message (Fallback):</label>
+        <label for="globalBlockMessageInput">Global Block Message (Fallback HTML)</label>
         <textarea id="globalBlockMessageInput"></textarea>
-         <p class="help-text">This message is shown for blocked sites that don't have a specific custom message defined above.</p>
+         <p class="help-text">This HTML message is shown for blocked sites without a specific custom message.</p>
     </div>
 
-    <button id="save">Save Settings</button>
+    <button id="save">Save All Settings</button>
     <div id="status"></div>
+
+    <!-- Hidden Template for Site Entries -->
+    <template id="site-entry-template">
+        <div class="site-entry">
+            <div class="site-entry-header">
+                 <label>Website Domain:</label>
+                 <button class="delete-button">Delete</button>
+            </div>
+            <input type="text" class="site-domain" placeholder="e.g., youtube.com">
+            <label>Custom HTML Message (Optional):</label>
+            <textarea class="site-message" placeholder="e.g., Let's be <b>PRODUCTIVE</b>!"></textarea>
+        </div>
+    </template>
 
     <script src="options.js"></script>
 </body>

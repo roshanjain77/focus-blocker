@@ -86,21 +86,48 @@
             text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3); /* Subtle text shadow */
         }
 
-        p#block-message { /* Target the specific paragraph */
+        #message-content p { /* Target the specific paragraph */
             font-size: 1.8em; /* Significantly larger font size for the message */
             color: #f0f0f0; /* Ensure high contrast */
             line-height: 1.6; /* Improve readability */
             font-weight: 300; /* Lighter font weight for elegance */
         }
+                /* Style the container for the message */
+                #message-content {
+            font-size: 1.1em; /* Base size for content within */
+            line-height: 1.6;
+            font-weight: 300;
+            /* Allow child elements like <h1>, <p>, <b> to inherit or override */
+        }
+        /* Optional: Style specific tags users might use */
+         #message-content h1 {
+             font-size: 1.8em; /* Example: Make h1 tags larger */
+             color: #ff8a8a;
+             margin-bottom: 15px;
+         }
+         #message-content b, #message-content strong {
+             font-weight: 600; /* Make bold tags stand out */
+             color: #716dd5;
+         }
+         #message-content a { /* Style links */
+             color: #8ab4f8;
+             text-decoration: none;
+             font-weight: 600;
+         }
+          #message-content a:hover {
+             text-decoration: underline;
+         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Focus Time Active</h1> <!-- Changed heading slightly -->
-        <p id="block-message">Loading message...</p> <!-- Placeholder text -->
+        <h1>Focus Time Active</h1>
+        <!-- ** DIV TO RENDER SANITIZED HTML ** -->
+        <div id="message-content">Loading message...</div>
     </div>
 
-    <!-- *** MAKE SURE THIS LINE IS HERE AND CORRECT *** -->
+    <!-- ** Load DOMPurify FIRST, then your script ** -->
+    <script src="purify.min.js"></script>
     <script src="blocked.js"></script>
 </body>
 </html>

@@ -1,26 +1,27 @@
 // --- Element References ---
 const enableToggle = document.getElementById('enable-toggle');
 const focusKeywordInput = document.getElementById('focusKeyword');
-// ** NEW/RENAMED **
-const sitesConfigTextarea = document.getElementById('sitesConfigInput');
 const globalMessageTextarea = document.getElementById('globalBlockMessageInput');
 const saveButton = document.getElementById('save');
 const statusDiv = document.getElementById('status');
 const authorizeButton = document.getElementById('authorize');
 const authStatusSpan = document.getElementById('auth-status');
 
-// --- Defaults ---
+// ** NEW UI Elements **
+const sitesListContainer = document.getElementById('sites-list');
+const addSiteButton = document.getElementById('add-site-button');
+const siteEntryTemplate = document.getElementById('site-entry-template');
+
 const defaultSitesConfig = [
-    { domain: "youtube.com", message: "Maybe watch this later?" },
+    { domain: "youtube.com", message: "Maybe watch this <b>later</b>?" },
     { domain: "facebook.com", message: null },
-    { domain: "twitter.com", message: null },
-    { domain: "reddit.com", message: "Focus time! No endless scrolling." }
+    { domain: "reddit.com", message: "<h1>Focus time!</h1><p>No endless scrolling.</p>" }
 ];
-const defaultGlobalMessage = 'This site is blocked during your scheduled focus time.';
+const defaultGlobalMessage = '<h1>Site Blocked</h1><p>This site is blocked during your scheduled focus time.</p>';
 const defaultFocusKeyword = '[Focus]';
 
-// --- Authorization (Keep as before) ---
-function checkAuthStatus() { /* ... no changes needed ... */
+
+function checkAuthStatus() {
     authStatusSpan.textContent = 'Checking...';
     chrome.identity.getAuthToken({ interactive: false }, (token) => {
         if (chrome.runtime.lastError || !token) {
@@ -32,7 +33,8 @@ function checkAuthStatus() { /* ... no changes needed ... */
         }
     });
 }
-authorizeButton.addEventListener('click', () => { /* ... no changes needed ... */
+
+authorizeButton.addEventListener('click', () => {
     authStatusSpan.textContent = 'Authorizing...';
     chrome.identity.getAuthToken({ interactive: true }, (token) => {
         if (chrome.runtime.lastError || !token) {
@@ -47,18 +49,52 @@ authorizeButton.addEventListener('click', () => { /* ... no changes needed ... *
     });
 });
 
+// --- Site List UI Management ---
+
+// Creates a DOM element for a single site entry
+function createSiteEntryElement(domain = '', message = '') {
+    const content = siteEntryTemplate.content.cloneNode(true);
+    const siteEntryDiv = content.querySelector('.site-entry');
+    const domainInput = content.querySelector('.site-domain');
+    const messageTextarea = content.querySelector('.site-message');
+    const deleteButton = content.querySelector('.delete-button');
+
+    domainInput.value = domain;
+    messageTextarea.value = message || ''; // Ensure empty string if null/undefined
+
+    deleteButton.addEventListener('click', () => {
+        siteEntryDiv.remove(); // Remove the element from the DOM
+    });
+
+    return siteEntryDiv;
+}
+
+// Renders the list of sites from the config data
+function renderSitesList(config) {
+    // Clear existing entries
+    sitesListContainer.innerHTML = '';
+    // Add entries from config
+    config.forEach(item => {
+        const element = createSiteEntryElement(item.domain, item.message);
+        sitesListContainer.appendChild(element);
+    });
+}
+
+// Event listener for the "Add Site" button
+addSiteButton.addEventListener('click', () => {
+    const newEntry = createSiteEntryElement(); // Create empty entry
+    sitesListContainer.appendChild(newEntry);
+});
+
 
 // --- Load Settings ---
 function loadSettings() {
-    // ** MODIFIED: Use new keys 'sitesConfig', 'globalBlockMessage' **
     chrome.storage.sync.get(['sitesConfig', 'globalBlockMessage', 'focusKeyword', 'isEnabled'], (data) => {
         const config = data.sitesConfig || defaultSitesConfig;
         const globalMessage = data.globalBlockMessage || defaultGlobalMessage;
 
-        // Format config object array back into textarea string
-        sitesConfigTextarea.value = config.map(item => {
-            return item.domain + (item.message ? ` || ${item.message}` : '');
-        }).join('\n');
+        // ** NEW: Render the dynamic list **
+        renderSitesList(config);
 
         globalMessageTextarea.value = globalMessage;
         focusKeywordInput.value = data.focusKeyword || defaultFocusKeyword;
@@ -69,39 +105,34 @@ function loadSettings() {
 
 // --- Save Settings ---
 saveButton.addEventListener('click', () => {
-    const lines = sitesConfigTextarea.value.split('\n');
     const newSitesConfig = [];
+    const siteEntryElements = sitesListContainer.querySelectorAll('.site-entry');
 
-    // ** MODIFIED: Parse the textarea format **
-    for (const line of lines) {
-        if (!line.trim()) continue; // Skip empty lines
+    // ** NEW: Read data from the dynamic UI elements **
+    siteEntryElements.forEach(element => {
+        const domainInput = element.querySelector('.site-domain');
+        const messageTextarea = element.querySelector('.site-message');
 
-        const parts = line.split('||');
-        const domainInput = parts[0].trim();
-        const customMessage = parts.length > 1 ? parts[1].trim() : null;
+        const domain = domainInput.value.trim();
+        const message = messageTextarea.value.trim() || null; // Store null if empty
 
-        // **Use the extractDomain helper (assuming it exists globally or import it)**
-        // If background.js handles extractDomain, we might need to simplify here
-        // or duplicate the logic if necessary. For now, let's assume basic trim.
-        // A robust solution would involve messaging the background script or duplicating.
-        // Simple version for options page: just use the trimmed input. Background validates.
-        const domain = domainInput; // Basic validation happens in background
-
+        // Basic validation: domain shouldn't be empty
         if (domain) {
-            newSitesConfig.push({
-                domain: domain, // Store the raw input domain for now
-                message: customMessage || null // Store null if message is empty/missing
-            });
+             // Further validation (like using extractDomain) could be added here,
+             // but the background script *must* re-validate anyway.
+            newSitesConfig.push({ domain: domain, message: message });
         } else {
-            console.warn("Skipping invalid line in config:", line);
+            console.warn("Skipping site entry with empty domain.");
+            // Optional: Add visual feedback to the user
+            domainInput.style.borderColor = 'red';
         }
-    }
+    });
 
-    const newGlobalMessage = globalMessageTextarea.value.trim() || defaultGlobalMessage; // Ensure not empty
+    const newGlobalMessage = globalMessageTextarea.value.trim() || defaultGlobalMessage;
     const keyword = focusKeywordInput.value.trim();
     const enabled = enableToggle.checked;
 
-    // ** MODIFIED: Save using new keys **
+    // Save using the same keys as before
     chrome.storage.sync.set({
         sitesConfig: newSitesConfig,
         globalBlockMessage: newGlobalMessage,
@@ -113,9 +144,8 @@ saveButton.addEventListener('click', () => {
         setTimeout(() => { statusDiv.textContent = ''; }, 3000);
         checkAuthStatus();
 
-        // Optionally trigger immediate background check (keep existing logic if desired)
-        chrome.runtime.sendMessage({ action: "settingsUpdated" }).catch(e => console.log("BG not listening? ", e)); // Inform background script
-
+        // Inform background script
+        chrome.runtime.sendMessage({ action: "settingsUpdated" }).catch(e => console.log("BG not listening? ", e));
     });
 });
 
