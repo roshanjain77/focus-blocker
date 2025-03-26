@@ -4,11 +4,12 @@
     "version": "1.0",
     "description": "Blocks specific websites during 'focus' events in your Google Calendar.",
     "permissions": [
-      "storage",       
-      "identity",      
-      "alarms",        
+      "storage",
+      "identity",
+      "alarms",
       "declarativeNetRequest",
-      "declarativeNetRequestFeedback"
+      "declarativeNetRequestFeedback",
+      "tabs"
     ],
     "host_permissions": [
       "<all_urls>",     
