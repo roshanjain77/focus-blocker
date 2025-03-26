@@ -1,0 +1,37 @@
+{
+    "manifest_version": 3,
+    "name": "Calendar Focus Blocker",
+    "version": "1.0",
+    "description": "Blocks specific websites during 'focus' events in your Google Calendar.",
+    "permissions": [
+      "storage",       
+      "identity",      
+      "alarms",        
+      "declarativeNetRequest",
+      "declarativeNetRequestFeedback"
+    ],
+    "host_permissions": [
+      "<all_urls>",     
+      "https://www.googleapis.com/"
+    ],
+    "background": {
+      "service_worker": "background.js"
+    },
+    "options_page": "options.html",
+    "action": {
+      "default_popup": "popup.html"
+      
+    },
+    "icons": {
+    },
+    "oauth2": {
+      "client_id": "146478383812-mm1mp15trdskedddut1rcf82nbm4shth.apps.googleusercontent.com",
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar.readonly"
+      ]
+    },
+    "web_accessible_resources": [{
+      "resources": ["blocked.html", "blocked.js"],
+      "matches": ["<all_urls>"]
+    }]
+}
