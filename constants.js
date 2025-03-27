@@ -17,3 +17,6 @@ export const defaultGlobalMessageForBG = '<h1>Site Blocked</h1><p>This site is b
 export const defaultFocusKeyword = '[Focus]';
 
 export const CHECK_INTERVAL_MINUTES = 5; // Calendar check frequency
+
+export const MANUAL_FOCUS_END_ALARM = 'manualFocusEndAlarm';
+export const MANUAL_FOCUS_END_TIME_KEY = 'manualFocusEndTime'; // Storage key

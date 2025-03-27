@@ -1,5 +1,5 @@
 // state.js
-import { defaultSitesConfigForBG, defaultGlobalMessageForBG, defaultFocusKeyword } from './constants.js';
+import { defaultSitesConfigForBG, defaultGlobalMessageForBG, defaultFocusKeyword, MANUAL_FOCUS_END_TIME_KEY } from './constants.js';
 import { extractDomain } from './utils.js';
 
 /**
@@ -62,22 +62,62 @@ export async function loadStateFromStorage() {
 }
 
 /**
- * Updates the status text displayed in the browser action popup.
- * @param {string} statusText - The text to display.
+ * Retrieves the manual focus end time from local storage.
+ * @returns {Promise<number|null>} Timestamp of end time, or null if not set/expired.
  */
-export function updatePopupState(statusText) {
-    // Use local storage as it's faster for popup state
-    chrome.storage.local.set({ extensionStatus: statusText }).catch(error => {
+export async function getManualFocusEndTime() {
+    try {
+        const data = await chrome.storage.local.get(MANUAL_FOCUS_END_TIME_KEY);
+        const endTime = data[MANUAL_FOCUS_END_TIME_KEY];
+        // Return null if not set or already passed
+        return (endTime && endTime > Date.now()) ? endTime : null;
+    } catch (error) {
+        console.error("Error getting manual focus end time:", error);
+        return null;
+    }
+}
+
+/**
+ * Sets the manual focus end time in local storage.
+ * @param {number} endTime - The timestamp when manual focus should end.
+ */
+export async function setManualFocusEndTime(endTime) {
+    try {
+        await chrome.storage.local.set({ [MANUAL_FOCUS_END_TIME_KEY]: endTime });
+        console.log("Manual focus end time set:", new Date(endTime));
+    } catch (error) {
+        console.error("Error setting manual focus end time:", error);
+    }
+}
+
+/**
+ * Clears the manual focus end time from local storage.
+ */
+export async function clearManualFocusEndTime() {
+    try {
+        await chrome.storage.local.remove(MANUAL_FOCUS_END_TIME_KEY);
+        console.log("Manual focus end time cleared.");
+    } catch (error) {
+        console.error("Error clearing manual focus end time:", error);
+    }
+}
+
+/**
+ * Updates the status text and manual focus end time in local storage for the popup.
+ * @param {string} statusText - The text to display.
+ * @param {number|null} manualEndTime - Timestamp or null.
+ */
+export function updatePopupState(statusText, manualEndTime = null) {
+    const stateToSet = { extensionStatus: statusText };
+    // Always include manualFocusEndTime, even if null, so popup can react
+    stateToSet[MANUAL_FOCUS_END_TIME_KEY] = manualEndTime;
+
+    chrome.storage.local.set(stateToSet).catch(error => {
         console.warn("Error setting popup state:", error);
     });
-    // Example: Update icon based on state (add icons first)
-    // let iconPath = "icons/icon48_disabled.png"; // Assuming you have icons
-    // if (statusText === 'Focus Active') iconPath = "icons/icon48_active.png";
-    // else if (statusText === 'Focus Inactive') iconPath = "icons/icon48_inactive.png";
-    // else if (statusText === 'Auth Required') iconPath = "icons/icon48_auth.png";
-    // else if (statusText === 'Error') iconPath = "icons/icon48_error.png";
-    // chrome.action.setIcon({ path: iconPath }).catch(e => console.warn("Error setting icon:", e));
+    // ... (optional icon logic) ...
 }
+
 
 /**
  * Initializes default settings on extension installation.
