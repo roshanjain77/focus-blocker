@@ -61,12 +61,15 @@
     <!-- == NEW DYNAMIC SITES UI == -->
     <div class="setting-group">
         <label>Blocked Websites & Custom Messages</label>
-        <p class="help-text">Define sites to block and an optional custom HTML message for each. If no message is set, the global message below is used.</p>
+        <!-- MODIFY HELP TEXT HERE -->
+        <p class="help-text">Define sites to block. Enter domains separated by commas (e.g., youtube.com, youtu.be) to apply the same message to multiple sites. If no custom message is set, the global message is used.</p>
         <div id="sites-list">
-            <!-- Site entries will be loaded here by options.js -->
+            <!-- Site entries will be loaded here -->
         </div>
-        <button id="add-site-button">+ Add Site</button>
+        <button id="add-site-button">+ Add Site Entry</button>
     </div>
+    <!-- ... -->
+
     <!-- ============================ -->
 
     <div class="setting-group">
@@ -78,18 +81,22 @@
     <button id="save">Save All Settings</button>
     <div id="status"></div>
 
+
     <!-- Hidden Template for Site Entries -->
     <template id="site-entry-template">
         <div class="site-entry">
             <div class="site-entry-header">
-                 <label>Website Domain:</label>
+                 <!-- MODIFY LABEL HERE -->
+                 <label>Website Domain(s) (comma-separated):</label>
                  <button class="delete-button">Delete</button>
             </div>
-            <input type="text" class="site-domain" placeholder="e.g., youtube.com">
+             <!-- MODIFY PLACEHOLDER HERE -->
+            <input type="text" class="site-domain" placeholder="e.g., youtube.com, youtu.be, facebook.com">
             <label>Custom HTML Message (Optional):</label>
             <textarea class="site-message" placeholder="e.g., Let's be <b>PRODUCTIVE</b>!"></textarea>
         </div>
     </template>
+    <!-- ... -->
 
     <script src="options.js"></script>
 </body>

@@ -52,22 +52,93 @@ authorizeButton.addEventListener('click', () => {
 // --- Site List UI Management ---
 
 // Creates a DOM element for a single site entry
-function createSiteEntryElement(domain = '', message = '') {
+function createSiteEntryElement(domainString = '', message = '') { // Renamed param for clarity
     const content = siteEntryTemplate.content.cloneNode(true);
     const siteEntryDiv = content.querySelector('.site-entry');
     const domainInput = content.querySelector('.site-domain');
     const messageTextarea = content.querySelector('.site-message');
     const deleteButton = content.querySelector('.delete-button');
 
-    domainInput.value = domain;
-    messageTextarea.value = message || ''; // Ensure empty string if null/undefined
+    domainInput.value = domainString; // Display the raw string
+    messageTextarea.value = message || '';
 
     deleteButton.addEventListener('click', () => {
-        siteEntryDiv.remove(); // Remove the element from the DOM
+        siteEntryDiv.remove();
     });
 
     return siteEntryDiv;
 }
+
+// Renders the list of sites from the config data
+function renderSitesList(rawConfig) { // Takes the raw config from storage
+    sitesListContainer.innerHTML = '';
+    rawConfig.forEach(item => {
+        // Pass the raw domain string (potentially comma-separated)
+        const element = createSiteEntryElement(item.domain, item.message);
+        sitesListContainer.appendChild(element);
+    });
+}
+
+// --- Load Settings ---
+function loadSettings() {
+    // Retrieve the raw config as stored
+    chrome.storage.sync.get(['sitesConfig', 'globalBlockMessage', 'focusKeyword', 'isEnabled'], (data) => {
+        const rawConfig = data.sitesConfig || defaultSitesConfig; // Use raw config
+        const globalMessage = data.globalBlockMessage || defaultGlobalMessage;
+
+        renderSitesList(rawConfig); // Render using the raw config
+
+        globalMessageTextarea.value = globalMessage;
+        focusKeywordInput.value = data.focusKeyword || defaultFocusKeyword;
+        enableToggle.checked = data.isEnabled === undefined ? true : data.isEnabled;
+    });
+    checkAuthStatus();
+}
+
+// --- Save Settings ---
+saveButton.addEventListener('click', () => {
+    const newRawSitesConfig = []; // Store the raw input data
+    const siteEntryElements = sitesListContainer.querySelectorAll('.site-entry');
+
+    siteEntryElements.forEach(element => {
+        const domainInput = element.querySelector('.site-domain');
+        const messageTextarea = element.querySelector('.site-message');
+
+        // Read the raw domain string, trim overall whitespace
+        const domainString = domainInput.value.trim();
+        const message = messageTextarea.value.trim() || null;
+
+        // Basic validation: raw domain string shouldn't be empty
+        if (domainString) {
+            // Store the potentially comma-separated string directly
+            newRawSitesConfig.push({ domain: domainString, message: message });
+             domainInput.style.borderColor = ''; // Reset border color on success
+        } else {
+            console.warn("Skipping site entry with empty domain field.");
+            domainInput.style.borderColor = 'red'; // Optional: visual feedback
+        }
+    });
+
+    const newGlobalMessage = globalMessageTextarea.value.trim() || defaultGlobalMessage;
+    const keyword = focusKeywordInput.value.trim() || defaultFocusKeyword; // Ensure keyword has default
+    const enabled = enableToggle.checked;
+
+    // Save the raw config using the same key
+    chrome.storage.sync.set({
+        sitesConfig: newRawSitesConfig, // Save the array with potentially comma-separated strings
+        globalBlockMessage: newGlobalMessage,
+        focusKeyword: keyword,
+        isEnabled: enabled
+    }, () => {
+        // ... (status update, auth check, inform background) ...
+        statusDiv.textContent = 'Settings saved!';
+        statusDiv.style.color = 'green';
+        setTimeout(() => { statusDiv.textContent = ''; }, 3000);
+        checkAuthStatus();
+        chrome.runtime.sendMessage({ action: "settingsUpdated" }).catch(e => console.log("BG not listening? ", e));
+    });
+});
+
 
 // Renders the list of sites from the config data
 function renderSitesList(config) {
@@ -87,67 +158,6 @@ addSiteButton.addEventListener('click', () => {
 });
 
 
-// --- Load Settings ---
-function loadSettings() {
-    chrome.storage.sync.get(['sitesConfig', 'globalBlockMessage', 'focusKeyword', 'isEnabled'], (data) => {
-        const config = data.sitesConfig || defaultSitesConfig;
-        const globalMessage = data.globalBlockMessage || defaultGlobalMessage;
-
-        // ** NEW: Render the dynamic list **
-        renderSitesList(config);
-
-        globalMessageTextarea.value = globalMessage;
-        focusKeywordInput.value = data.focusKeyword || defaultFocusKeyword;
-        enableToggle.checked = data.isEnabled === undefined ? true : data.isEnabled;
-    });
-    checkAuthStatus();
-}
-
-// --- Save Settings ---
-saveButton.addEventListener('click', () => {
-    const newSitesConfig = [];
-    const siteEntryElements = sitesListContainer.querySelectorAll('.site-entry');
-
-    // ** NEW: Read data from the dynamic UI elements **
-    siteEntryElements.forEach(element => {
-        const domainInput = element.querySelector('.site-domain');
-        const messageTextarea = element.querySelector('.site-message');
-
-        const domain = domainInput.value.trim();
-        const message = messageTextarea.value.trim() || null; // Store null if empty
-
-        // Basic validation: domain shouldn't be empty
-        if (domain) {
-             // Further validation (like using extractDomain) could be added here,
-             // but the background script *must* re-validate anyway.
-            newSitesConfig.push({ domain: domain, message: message });
-        } else {
-            console.warn("Skipping site entry with empty domain.");
-            // Optional: Add visual feedback to the user
-            domainInput.style.borderColor = 'red';
-        }
-    });
-
-    const newGlobalMessage = globalMessageTextarea.value.trim() || defaultGlobalMessage;
-    const keyword = focusKeywordInput.value.trim();
-    const enabled = enableToggle.checked;
-
-    // Save using the same keys as before
-    chrome.storage.sync.set({
-        sitesConfig: newSitesConfig,
-        globalBlockMessage: newGlobalMessage,
-        focusKeyword: keyword,
-        isEnabled: enabled
-    }, () => {
-        statusDiv.textContent = 'Settings saved!';
-        statusDiv.style.color = 'green';
-        setTimeout(() => { statusDiv.textContent = ''; }, 3000);
-        checkAuthStatus();
-
-        // Inform background script
-        chrome.runtime.sendMessage({ action: "settingsUpdated" }).catch(e => console.log("BG not listening? ", e));
-    });
-});
 
 // --- Initialize ---
 document.addEventListener('DOMContentLoaded', loadSettings);
