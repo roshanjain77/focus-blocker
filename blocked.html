@@ -117,6 +117,86 @@
           #message-content a:hover {
              text-decoration: underline;
          }
+
+                 /* Styles for Allowed Videos Section */
+        #allowed-videos-container {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        #allowed-videos-container h2 {
+            color: #a2ffa2; /* Light green */
+            font-size: 1.5em;
+            margin-bottom: 15px;
+        }
+        .allowed-video-item {
+            background-color: rgba(60, 60, 60, 0.7);
+            padding: 10px 15px;
+            margin-bottom: 10px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+            color: #ccc;
+            font-size: 0.95em;
+            text-align: left; /* Align text left */
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .allowed-video-item:hover {
+            background-color: rgba(80, 80, 80, 0.9);
+            color: #fff;
+        }
+        .allowed-video-item::before { /* Simple play icon */
+            content: '▶ ';
+            color: #a2ffa2;
+            margin-right: 8px;
+        }
+
+        /* Styles for Video Player */
+        #video-player-container {
+            margin-top: 20px;
+            position: relative; /* For potential close button positioning */
+             /* Ensure it takes space even when empty initially */
+            width: 100%;
+            max-width: 560px; /* Or other desired max width */
+            aspect-ratio: 16 / 9; /* Maintain aspect ratio */
+            margin-left: auto;
+            margin-right: auto;
+            display: none;
+        }
+        /* Add a class to show it */
+        #video-player-container.visible {
+            display: block;
+        }
+
+         #video-player-container iframe {
+             position: absolute;
+             top: 0;
+             left: 0;
+             width: 100%;
+             height: 100%;
+             border: none; /* Remove default border */
+         }
+
+        /* Optional: Close button for video */
+        #close-video-btn {
+            position: absolute;
+            top: -25px; /* Position above the player */
+            right: 0;
+            background: #ff6b6b;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            font-size: 12px;
+            line-height: 18px;
+            text-align: center;
+            cursor: pointer;
+            display: none; /* Hidden until video loads */
+            z-index: 10;
+        }
+        #close-video-btn:hover { background: #e05252; }
+
     </style>
 </head>
 <body>
@@ -124,6 +204,23 @@
         <h1>Focus Time Active</h1>
         <!-- ** DIV TO RENDER SANITIZED HTML ** -->
         <div id="message-content">Loading message...</div>
+
+        <!-- ** NEW: Container for Allowed Videos List ** -->
+        <div id="allowed-videos-container" style="display: none;"> <!-- Initially hidden -->
+            <h2>Wanna Learn?</h2>
+            <div id="allowed-videos-list">
+                <!-- Placeholders will be added here -->
+            </div>
+        </div>
+        <!-- **************************************** -->
+
+        <!-- ** NEW: Container for the Video Player ** -->
+        <div id="video-player-container">
+            <button id="close-video-btn" title="Close Video">X</button>
+            <!-- Iframe will be added here -->
+        </div>
+        <!-- ************************************** -->
+        
     </div>
 
     <!-- ** Load DOMPurify FIRST, then your script ** -->

@@ -3,14 +3,13 @@ import { RULE_PRIORITY, FOCUS_RULE_ID_START, MAX_BLOCKED_SITES, FOCUS_RULE_ID_EN
 import { defaultGlobalMessageForBG } from './constants.js'; // Import default message
 
 /**
- * Updates Declarative Net Request rules based on whether blocking should be active.
- * Each rule will redirect to blocked.html with the specific message encoded in the URL.
- * @param {boolean} shouldBlock - Whether to enable blocking rules.
- * @param {Array<{domain: string, message: string|null}>} sitesConfig - The current site configuration.
- * @param {string} globalBlockMessage - The global fallback message.
- * @param {string} redirectUrl - The base URL of the blocked page (e.g., chrome-extension://.../blocked.html).
+ * Updates DNR rules. Redirect URL will include encoded message and allowed video IDs if applicable.
+ * @param {boolean} shouldBlock - Enable/disable blocking.
+ * @param {Array<{domain: string, message: string|null, allowedVideoIds: string[]}>} sitesConfig - Processed config.
+ * @param {string} globalBlockMessage - Fallback message.
+ * @param {string} redirectUrl - Base blocked page URL.
  */
-export async function updateBlockingRules(shouldBlock, sitesConfig, globalBlockMessage, redirectUrl) { // <-- Updated params
+export async function updateBlockingRules(shouldBlock, sitesConfig, globalBlockMessage, redirectUrl) {
     const logPrefix = "[DNR Rules]";
     try {
         const allSessionRules = await chrome.declarativeNetRequest.getSessionRules();
@@ -19,14 +18,13 @@ export async function updateBlockingRules(shouldBlock, sitesConfig, globalBlockM
             .map(rule => rule.id);
 
         const rulesToAdd = [];
-        const currentSitesConfig = sitesConfig || []; // Ensure it's an array
-
+        const currentSitesConfig = sitesConfig || [];
+        
         if (shouldBlock && currentSitesConfig.length > 0 && redirectUrl) {
-            console.log(`${logPrefix} Setting up rules for ${currentSitesConfig.length} sites.`);
-
-            const baseRedirectUrl = redirectUrl.split('?')[0]; // Ensure we use the base URL
-            const fallbackMessage = globalBlockMessage || defaultGlobalMessageForBG; // Ensure fallback exists
-
+            console.log(`${logPrefix} Setting up rules for ${currentSitesConfig.length} processed sites.`);
+            const baseRedirectUrl = redirectUrl.split('?')[0];
+            const fallbackMessage = globalBlockMessage || defaultGlobalMessageForBG;
+        
             currentSitesConfig.forEach((site, index) => {
                 if (index >= MAX_BLOCKED_SITES) {
                     console.warn(`${logPrefix} Max rule limit (${MAX_BLOCKED_SITES}) reached, skipping domain: ${site.domain}`);
@@ -40,16 +38,22 @@ export async function updateBlockingRules(shouldBlock, sitesConfig, globalBlockM
                 // *** Determine the message and encode it for THIS rule ***
                 const messageToEncode = site.message || fallbackMessage;
                 const encodedMessage = encodeURIComponent(messageToEncode);
-                const targetUrl = `${baseRedirectUrl}?message=${encodedMessage}`;
+                let targetUrl = `${baseRedirectUrl}?message=${encodedMessage}`;
                 // **********************************************************
+
+                // Check if it's YouTube and has allowed videos
+                if ((site.domain === 'youtube.com' || site.domain === 'youtu.be') && site.allowedVideoIds.length > 0) {
+                    const encodedVideos = encodeURIComponent(site.allowedVideoIds.join(',')); // Join IDs with comma for URL param
+                    targetUrl += `&videos=${encodedVideos}`; // Append video IDs parameter
+                    console.log(`${logPrefix} Adding allowed videos to rule for ${site.domain}: ${site.allowedVideoIds.length} videos`);
+                }
+
 
                 const ruleId = FOCUS_RULE_ID_START + index;
                 rulesToAdd.push({
                     id: ruleId,
                     priority: RULE_PRIORITY,
-                    // *** Use the URL with the encoded message ***
-                    action: { type: 'redirect', redirect: { url: targetUrl } },
-                    // *********************************************
+                    action: { type: 'redirect', redirect: { url: targetUrl } }, // Use potentially modified targetUrl
                     condition: {
                         urlFilter: `||${site.domain}^`, // Match domain and subdomains
                         excludedInitiatorDomains: [chrome.runtime.id],

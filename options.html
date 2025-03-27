@@ -36,6 +36,23 @@
         .site-entry label { margin-top: 0; font-size: 0.95em; }
         #add-site-button { background-color: #34a853; margin-top: 15px; }
         #add-site-button:hover { background-color: #2c8f46; }
+        .allowed-videos-section {
+            margin-top: 15px;
+            padding-top: 10px;
+            border-top: 1px dashed #ccc;
+            /* Initially hidden, shown by JS if YouTube is detected */
+            display: none;
+        }
+        .allowed-videos-section label {
+            font-size: 0.9em;
+            font-weight: normal;
+        }
+        .allowed-videos-section textarea {
+            min-height: 40px;
+            font-family: monospace;
+            font-size: 0.9em;
+        }
+
     </style>
 </head>
 <body>
@@ -94,6 +111,16 @@
             <input type="text" class="site-domain" placeholder="e.g., youtube.com, youtu.be, facebook.com">
             <label>Custom HTML Message (Optional):</label>
             <textarea class="site-message" placeholder="e.g., Let's be <b>PRODUCTIVE</b>!"></textarea>
+
+            <!-- ** NEW: Allowed Videos Section ** -->
+            <div class="allowed-videos-section">
+                <label for="allowed-videos">Allowed YouTube Video IDs (one per line):</label>
+                <textarea class="allowed-videos" placeholder="dQw4w9WgXcQ
+kfchvCyHmsc"></textarea>
+                <p class="help-text"><small>Only applies if 'youtube.com' or 'youtu.be' is listed above.</small></p>
+            </div>
+            <!-- ****************************** -->
+            
         </div>
     </template>
     <!-- ... -->

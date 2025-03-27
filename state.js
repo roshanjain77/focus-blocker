@@ -17,7 +17,8 @@ export async function loadStateFromStorage() {
     console.log("loadStateFromStorage: Loading settings...");
     let state = {
         isEnabled: true,
-        sitesConfig: [], // Will hold the EXPANDED and VALIDATED list
+        // Processed list will now include allowedVideoIds
+        sitesConfig: [], // Array<{domain: string, message: string|null, allowedVideoIds: string[]}>
         blockedDomains: [],
         globalBlockMessage: defaultGlobalMessageForBG,
         focusKeyword: defaultFocusKeyword,
@@ -35,20 +36,26 @@ export async function loadStateFromStorage() {
 
         const rawSitesConfig = data.sitesConfig || defaultSitesConfigForBG;
 
-        // *** PROCESS RAW CONFIG: Split comma-separated domains and validate ***
-        state.sitesConfig = rawSitesConfig.flatMap(item => { // Use flatMap to handle one-to-many expansion
+        // PROCESS RAW CONFIG: Split domains, validate, and associate shared message/video IDs
+        state.sitesConfig = rawSitesConfig.flatMap(item => {
             const domainString = item.domain || '';
             const message = item.message || null;
+            // Get allowedVideoIds from raw item, default to empty array
+            const allowedVideoIds = Array.isArray(item.allowedVideoIds) ? item.allowedVideoIds : [];
             const processedEntries = [];
 
-            domainString.split(',') // Split by comma
-                .map(part => part.trim()) // Trim whitespace from each part
-                .filter(trimmedPart => trimmedPart !== '') // Remove empty parts
+            domainString.split(',')
+                .map(part => part.trim())
+                .filter(trimmedPart => trimmedPart !== '')
                 .forEach(potentialDomain => {
-                    const validDomain = extractDomain(potentialDomain); // Validate/normalize
+                    const validDomain = extractDomain(potentialDomain);
                     if (validDomain) {
-                        // Add a separate entry for each valid domain
-                        processedEntries.push({ domain: validDomain, message: message });
+                        // Add entry with the VALID domain and the SHARED message/video IDs
+                        processedEntries.push({
+                             domain: validDomain,
+                             message: message,
+                             allowedVideoIds: allowedVideoIds // Pass along the video IDs
+                        });
                     } else {
                         console.warn(`Invalid domain found and skipped: "${potentialDomain}" from input "${domainString}"`);
                     }
@@ -62,6 +69,7 @@ export async function loadStateFromStorage() {
 
         console.log("State loaded/updated. Enabled:", state.isEnabled, "Keyword:", state.focusKeyword);
         console.log("Processed Blocked Domains Count:", state.sitesConfig.length, "Domains:", state.blockedDomains);
+        console.log("Processed Sites Config:", state.sitesConfig); // Log the full processed config
 
 
     } catch (error) {
@@ -72,15 +80,15 @@ export async function loadStateFromStorage() {
         state.globalBlockMessage = defaultGlobalMessageForBG;
         // Process defaults similar to loaded data
         state.sitesConfig = defaultSitesConfigForBG.flatMap(item => {
-             const domainString = item.domain || '';
-             const message = item.message || null;
-             return domainString.split(',')
-                 .map(part => part.trim())
-                 .filter(trimmedPart => trimmedPart !== '')
-                 .map(potentialDomain => extractDomain(potentialDomain))
-                 .filter(validDomain => validDomain) // Filter out nulls from extractDomain
-                 .map(validDomain => ({ domain: validDomain, message: message }));
-         });
+            const domainString = item.domain || '';
+            const message = item.message || null;
+            const allowedVideoIds = Array.isArray(item.allowedVideoIds) ? item.allowedVideoIds : []; // Handle defaults too
+            return domainString.split(',')
+                .map(part => part.trim()).filter(p => p)
+                .map(potentialDomain => extractDomain(potentialDomain))
+                .filter(validDomain => validDomain)
+                .map(validDomain => ({ domain: validDomain, message: message, allowedVideoIds: allowedVideoIds })); // Include IDs in defaults processing
+        });
         state.blockedDomains = state.sitesConfig.map(item => item.domain);
         console.warn("Applied default state due to loading error. Processed default domains:", state.blockedDomains);
     }

@@ -21,6 +21,15 @@ const defaultGlobalMessage = '<h1>Site Blocked</h1><p>This site is blocked durin
 const defaultFocusKeyword = '[Focus]';
 
 
+// --- Helper to check if string contains youtube ---
+function containsYouTube(domainString) {
+    if (!domainString) return false;
+    return domainString.split(',').some(part => {
+        const trimmed = part.trim().toLowerCase();
+        return trimmed === 'youtube.com' || trimmed === 'youtu.be';
+    });
+}
+
 function checkAuthStatus() {
     authStatusSpan.textContent = 'Checking...';
     chrome.identity.getAuthToken({ interactive: false }, (token) => {
@@ -52,15 +61,33 @@ authorizeButton.addEventListener('click', () => {
 // --- Site List UI Management ---
 
 // Creates a DOM element for a single site entry
-function createSiteEntryElement(domainString = '', message = '') { // Renamed param for clarity
+function createSiteEntryElement(domainString = '', message = '', allowedVideoIds = []) { // Added allowedVideoIds
     const content = siteEntryTemplate.content.cloneNode(true);
     const siteEntryDiv = content.querySelector('.site-entry');
     const domainInput = content.querySelector('.site-domain');
     const messageTextarea = content.querySelector('.site-message');
     const deleteButton = content.querySelector('.delete-button');
+    const allowedVideosSection = content.querySelector('.allowed-videos-section');
+    const allowedVideosTextarea = content.querySelector('.allowed-videos');
 
-    domainInput.value = domainString; // Display the raw string
+    domainInput.value = domainString;
     messageTextarea.value = message || '';
+    allowedVideosTextarea.value = allowedVideoIds.join('\n'); // Join IDs with newlines for textarea
+
+    // --- Logic to show/hide Allowed Videos section ---
+    const toggleAllowedVideosVisibility = () => {
+        if (containsYouTube(domainInput.value)) {
+            allowedVideosSection.style.display = 'block';
+        } else {
+            allowedVideosSection.style.display = 'none';
+        }
+    };
+
+    // Check visibility on creation and when domain input changes
+    toggleAllowedVideosVisibility();
+    domainInput.addEventListener('input', toggleAllowedVideosVisibility);
+    // --- End Visibility Logic ---
+
 
     deleteButton.addEventListener('click', () => {
         siteEntryDiv.remove();
@@ -69,26 +96,24 @@ function createSiteEntryElement(domainString = '', message = '') { // Renamed pa
     return siteEntryDiv;
 }
 
-// Renders the list of sites from the config data
-function renderSitesList(rawConfig) { // Takes the raw config from storage
+// Renders the list of sites from the raw config data
+function renderSitesList(rawConfig) {
     sitesListContainer.innerHTML = '';
     rawConfig.forEach(item => {
-        // Pass the raw domain string (potentially comma-separated)
-        const element = createSiteEntryElement(item.domain, item.message);
+        // Pass raw domain string and allowed IDs (ensure it's an array)
+        const element = createSiteEntryElement(item.domain, item.message, item.allowedVideoIds || []);
         sitesListContainer.appendChild(element);
     });
 }
 
 // --- Load Settings ---
 function loadSettings() {
-    // Retrieve the raw config as stored
     chrome.storage.sync.get(['sitesConfig', 'globalBlockMessage', 'focusKeyword', 'isEnabled'], (data) => {
-        const rawConfig = data.sitesConfig || defaultSitesConfig; // Use raw config
-        const globalMessage = data.globalBlockMessage || defaultGlobalMessage;
+        const rawConfig = data.sitesConfig || defaultSitesConfig;
+        renderSitesList(rawConfig); // Render using the raw config including allowedVideoIds
 
-        renderSitesList(rawConfig); // Render using the raw config
-
-        globalMessageTextarea.value = globalMessage;
+        // ... (load other settings as before) ...
+        globalMessageTextarea.value = data.globalBlockMessage || defaultGlobalMessage;
         focusKeywordInput.value = data.focusKeyword || defaultFocusKeyword;
         enableToggle.checked = data.isEnabled === undefined ? true : data.isEnabled;
     });
@@ -97,40 +122,50 @@ function loadSettings() {
 
 // --- Save Settings ---
 saveButton.addEventListener('click', () => {
-    const newRawSitesConfig = []; // Store the raw input data
+    const newRawSitesConfig = [];
     const siteEntryElements = sitesListContainer.querySelectorAll('.site-entry');
 
     siteEntryElements.forEach(element => {
         const domainInput = element.querySelector('.site-domain');
         const messageTextarea = element.querySelector('.site-message');
+        const allowedVideosTextarea = element.querySelector('.allowed-videos'); // Get the new textarea
 
-        // Read the raw domain string, trim overall whitespace
         const domainString = domainInput.value.trim();
         const message = messageTextarea.value.trim() || null;
 
-        // Basic validation: raw domain string shouldn't be empty
+        // Process Allowed Video IDs
+        const rawVideoIds = allowedVideosTextarea.value.trim();
+        const allowedVideoIds = rawVideoIds
+            ? rawVideoIds.split(/[\n,]+/) // Split by newline OR comma
+                  .map(id => id.trim())
+                  .filter(id => /^[a-zA-Z0-9_-]{11}$/.test(id)) // Basic validation: 11 chars, YT charset
+            : []; // Empty array if textarea is empty
+
         if (domainString) {
-            // Store the potentially comma-separated string directly
-            newRawSitesConfig.push({ domain: domainString, message: message });
-             domainInput.style.borderColor = ''; // Reset border color on success
+            // Store the potentially comma-separated string and the processed video IDs
+            newRawSitesConfig.push({
+                domain: domainString,
+                message: message,
+                allowedVideoIds: allowedVideoIds // Store the cleaned array
+            });
+            domainInput.style.borderColor = '';
         } else {
             console.warn("Skipping site entry with empty domain field.");
-            domainInput.style.borderColor = 'red'; // Optional: visual feedback
+            domainInput.style.borderColor = 'red';
         }
     });
 
     const newGlobalMessage = globalMessageTextarea.value.trim() || defaultGlobalMessage;
-    const keyword = focusKeywordInput.value.trim() || defaultFocusKeyword; // Ensure keyword has default
+    const keyword = focusKeywordInput.value.trim() || defaultFocusKeyword;
     const enabled = enableToggle.checked;
 
-    // Save the raw config using the same key
+    // Save the raw config including allowedVideoIds
     chrome.storage.sync.set({
-        sitesConfig: newRawSitesConfig, // Save the array with potentially comma-separated strings
+        sitesConfig: newRawSitesConfig,
         globalBlockMessage: newGlobalMessage,
         focusKeyword: keyword,
         isEnabled: enabled
     }, () => {
-        // ... (status update, auth check, inform background) ...
         statusDiv.textContent = 'Settings saved!';
         statusDiv.style.color = 'green';
         setTimeout(() => { statusDiv.textContent = ''; }, 3000);
@@ -138,18 +173,6 @@ saveButton.addEventListener('click', () => {
         chrome.runtime.sendMessage({ action: "settingsUpdated" }).catch(e => console.log("BG not listening? ", e));
     });
 });
-
-
-// Renders the list of sites from the config data
-function renderSitesList(config) {
-    // Clear existing entries
-    sitesListContainer.innerHTML = '';
-    // Add entries from config
-    config.forEach(item => {
-        const element = createSiteEntryElement(item.domain, item.message);
-        sitesListContainer.appendChild(element);
-    });
-}
 
 // Event listener for the "Add Site" button
 addSiteButton.addEventListener('click', () => {
