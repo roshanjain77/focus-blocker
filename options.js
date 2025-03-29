@@ -19,7 +19,136 @@ const defaultSitesConfig = [
 ];
 const defaultGlobalMessage = '<h1>Site Blocked</h1><p>This site is blocked during your scheduled focus time.</p>';
 const defaultFocusKeyword = '[Focus]';
+const exportButton = document.getElementById('export-button');
+const importButton = document.getElementById('import-button');
+const importFileInput = document.getElementById('import-file-input');
+const importStatusDiv = document.getElementById('import-status');
 
+
+
+// --- Config Keys to Export/Import ---
+const CONFIG_KEYS = ['focusKeyword', 'sitesConfig', 'globalBlockMessage', 'isEnabled']; // Include isEnabled
+
+// --- Export Function ---
+async function exportSettings() {
+    try {
+        const settings = await chrome.storage.sync.get(CONFIG_KEYS);
+        // Use the raw sitesConfig as stored for export
+        const settingsJson = JSON.stringify(settings, null, 2); // Pretty print JSON
+        const blob = new Blob([settingsJson], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'focus-blocker-settings.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        importStatusDiv.textContent = 'Settings exported successfully.';
+        importStatusDiv.className = 'success';
+    } catch (error) {
+        console.error("Error exporting settings:", error);
+        importStatusDiv.textContent = `Error exporting settings: ${error.message}`;
+        importStatusDiv.className = 'error';
+    }
+}
+
+// --- Import Function ---
+function importSettings(event) {
+    const file = event.target.files[0];
+    if (!file) {
+        importStatusDiv.textContent = 'No file selected.';
+        importStatusDiv.className = 'error';
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+        try {
+            const text = e.target.result;
+            const importedSettings = JSON.parse(text);
+
+            // ** Basic Validation **
+            if (typeof importedSettings !== 'object' || importedSettings === null) {
+                throw new Error("Invalid file format. Not a JSON object.");
+            }
+
+            const settingsToSave = {};
+            let validationOk = true;
+
+            // Validate and prepare each key
+            if (CONFIG_KEYS.includes('focusKeyword')) {
+                if (typeof importedSettings.focusKeyword === 'string') {
+                    settingsToSave.focusKeyword = importedSettings.focusKeyword;
+                } else if (importedSettings.focusKeyword !== undefined) {
+                    console.warn("Import Warning: Invalid 'focusKeyword' type, using default.");
+                    // settingsToSave.focusKeyword = defaultFocusKeyword; // Or just omit
+                }
+            }
+            if (CONFIG_KEYS.includes('globalBlockMessage')) {
+                 if (typeof importedSettings.globalBlockMessage === 'string') {
+                    settingsToSave.globalBlockMessage = importedSettings.globalBlockMessage;
+                } else if (importedSettings.globalBlockMessage !== undefined) {
+                    console.warn("Import Warning: Invalid 'globalBlockMessage' type, using default.");
+                    // settingsToSave.globalBlockMessage = defaultGlobalMessage; // Or just omit
+                }
+            }
+             if (CONFIG_KEYS.includes('isEnabled')) {
+                if (typeof importedSettings.isEnabled === 'boolean') {
+                    settingsToSave.isEnabled = importedSettings.isEnabled;
+                } else if (importedSettings.isEnabled !== undefined) {
+                     console.warn("Import Warning: Invalid 'isEnabled' type, using default (true).");
+                     settingsToSave.isEnabled = true; // Default to true on bad import type
+                }
+             }
+            if (CONFIG_KEYS.includes('sitesConfig')) {
+                 if (Array.isArray(importedSettings.sitesConfig)) {
+                    // Optional: Deeper validation of sitesConfig structure here if needed
+                    // e.g., check if items have 'domain' string, 'allowedVideos' array etc.
+                    // For now, we trust the structure and let loadStateFromStorage handle processing.
+                    settingsToSave.sitesConfig = importedSettings.sitesConfig;
+                } else if (importedSettings.sitesConfig !== undefined) {
+                    validationOk = false;
+                    throw new Error("Invalid 'sitesConfig' format. Must be an array.");
+                }
+             }
+
+            if (!validationOk) {
+                // Error already thrown by validation logic above
+                return;
+            }
+
+            // Save validated settings
+            await chrome.storage.sync.set(settingsToSave);
+
+            importStatusDiv.textContent = 'Settings imported successfully! Reloading UI...';
+            importStatusDiv.className = 'success';
+
+            // Reload the options UI to reflect imported settings
+            loadSettings();
+
+            // Inform background script that settings might have changed drastically
+            chrome.runtime.sendMessage({ action: "settingsUpdated" }).catch(e => console.log("BG not listening? ", e));
+
+        } catch (error) {
+            console.error("Error importing settings:", error);
+            importStatusDiv.textContent = `Error importing settings: ${error.message}`;
+            importStatusDiv.className = 'error';
+        } finally {
+            // Reset file input so the same file can be selected again if needed
+            importFileInput.value = '';
+        }
+    };
+
+    reader.onerror = (e) => {
+        console.error("File reading error:", e);
+        importStatusDiv.textContent = 'Error reading the selected file.';
+        importStatusDiv.className = 'error';
+        importFileInput.value = ''; // Reset input
+    };
+
+    reader.readAsText(file);
+}
 
 // --- Helper to check if string contains youtube ---
 function containsYouTube(domainString) {
@@ -57,6 +186,10 @@ authorizeButton.addEventListener('click', () => {
         }
     });
 });
+
+exportButton.addEventListener('click', exportSettings);
+importButton.addEventListener('click', () => importFileInput.click()); // Trigger hidden input
+importFileInput.addEventListener('change', importSettings);
 
 // --- Site List UI Management ---
 
