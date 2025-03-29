@@ -5,6 +5,8 @@ export const RULE_PRIORITY = 1;
 export const FOCUS_RULE_ID_START = 1000; // Start ID for DNR rules
 export const MAX_BLOCKED_SITES = 100; // Max DNR rules to create
 export const FOCUS_RULE_ID_END = FOCUS_RULE_ID_START + MAX_BLOCKED_SITES - 1;
+export const BLOCKED_TABS_MAP_KEY = 'blockedTabsMap'; // { tabId: originalUrl }
+
 
 // Default values
 export const defaultSitesConfigForBG = [

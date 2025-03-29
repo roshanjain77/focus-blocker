@@ -1,5 +1,5 @@
 // state.js
-import { defaultSitesConfigForBG, defaultGlobalMessageForBG, defaultFocusKeyword, MANUAL_FOCUS_END_TIME_KEY } from './constants.js';
+import { defaultSitesConfigForBG, defaultGlobalMessageForBG, defaultFocusKeyword, MANUAL_FOCUS_END_TIME_KEY, BLOCKED_TABS_MAP_KEY } from './constants.js';
 import { extractDomain } from './utils.js';
 
 /**
@@ -166,5 +166,54 @@ export async function initializeSettings() {
          console.log("Default settings applied on install.");
     } catch (error) {
         console.error("Error initializing settings:", error);
+    }
+}
+
+/** Gets the map of blocked tabs from local storage. */
+export async function getBlockedTabs() {
+    try {
+        const data = await chrome.storage.local.get(BLOCKED_TABS_MAP_KEY);
+        return data[BLOCKED_TABS_MAP_KEY] || {}; // Return empty object if not found
+    } catch (error) {
+        console.error("Error getting blocked tabs map:", error);
+        return {};
+    }
+}
+
+/** Adds or updates a tab in the blocked tabs map. */
+export async function addBlockedTab(tabId, originalUrl) {
+    if (!tabId || !originalUrl) return;
+    try {
+        const map = await getBlockedTabs();
+        map[tabId] = originalUrl;
+        await chrome.storage.local.set({ [BLOCKED_TABS_MAP_KEY]: map });
+        console.log(`Blocked tab added/updated: ${tabId} -> ${originalUrl}`);
+    } catch (error) {
+        console.error(`Error adding blocked tab ${tabId}:`, error);
+    }
+}
+
+/** Removes a tab from the blocked tabs map. */
+export async function removeBlockedTab(tabId) {
+     if (!tabId) return;
+    try {
+        const map = await getBlockedTabs();
+        if (map[tabId]) {
+            delete map[tabId];
+            await chrome.storage.local.set({ [BLOCKED_TABS_MAP_KEY]: map });
+            console.log(`Blocked tab removed: ${tabId}`);
+        }
+    } catch (error) {
+        console.error(`Error removing blocked tab ${tabId}:`, error);
+    }
+}
+
+/** Clears the entire blocked tabs map. */
+export async function clearBlockedTabs() {
+    try {
+        await chrome.storage.local.remove(BLOCKED_TABS_MAP_KEY);
+        console.log("Blocked tabs map cleared.");
+    } catch (error) {
+        console.error("Error clearing blocked tabs map:", error);
     }
 }

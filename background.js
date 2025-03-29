@@ -1,7 +1,7 @@
 // background.js
 import * as constants from './constants.js';
 // Import state functions for manual focus time
-import { loadStateFromStorage, initializeSettings, getManualFocusEndTime, setManualFocusEndTime, clearManualFocusEndTime, updatePopupState } from './state.js';
+import { getBlockedTabs, removeBlockedTab, clearBlockedTabs, loadStateFromStorage, initializeSettings, getManualFocusEndTime, setManualFocusEndTime, clearManualFocusEndTime, updatePopupState } from './state.js';
 import { getAuthToken, removeCachedAuthToken } from './auth.js';
 import { isCurrentlyInFocusEvent } from './calendar.js';
 import { updateBlockingRules } from './blocking.js';
@@ -10,6 +10,48 @@ import { checkAndBlockTabIfNeeded, checkExistingTabs } from './tabs.js';
 // --- Global State ---
 // currentFocusState useful for quick checks in listeners & transition logic
 let currentFocusState = false;
+
+// --- Helper function to restore tabs ---
+async function restoreBlockedTabs() {
+    console.log("Attempting to restore blocked tabs...");
+    const map = await getBlockedTabs();
+    const tabsToRestore = Object.entries(map); // [ [tabId, url], ... ]
+    let restoredCount = 0;
+
+    if (tabsToRestore.length === 0) {
+        console.log("No tabs found in the blocked map.");
+        return;
+    }
+
+    const baseRedirectUrl = chrome.runtime.getURL('blocked.html').split('?')[0];
+
+    for (const [tabIdStr, originalUrl] of tabsToRestore) {
+        const tabId = parseInt(tabIdStr, 10);
+        if (isNaN(tabId)) continue;
+
+        try {
+            const tab = await chrome.tabs.get(tabId);
+            // Check if tab still exists AND is *currently* on our block page
+            if (tab && tab.url && tab.url.startsWith(baseRedirectUrl)) {
+                console.log(`Restoring tab ${tabId} to ${originalUrl}`);
+                await chrome.tabs.update(tabId, { url: originalUrl });
+                restoredCount++;
+            } else {
+                 // Tab doesn't exist or navigated away - remove from map implicitly later
+                 console.log(`Skipping restore for tab ${tabId}: Not found or not on block page.`);
+            }
+        } catch (error) {
+            // Tab likely closed, ignore "No tab with id" error
+            if (!error.message.includes("No tab with id")) {
+                 console.warn(`Error restoring tab ${tabId}:`, error);
+            }
+        }
+    }
+    console.log(`Finished restoring tabs. Attempted: ${tabsToRestore.length}, Actually Restored: ${restoredCount}`);
+    // Clear the map AFTER attempting restoration
+    await clearBlockedTabs();
+}
+
 
 // --- Alarm & Focus Management Functions ---
 
@@ -121,6 +163,8 @@ async function stopManualFocus() {
         currentFocusState = false; // Update internal state AFTER rules removed
         updatePopupState('Focus Inactive', null); // Update popup state
 
+        await restoreBlockedTabs(); // *** Restore tabs AFTER disabling rules ***
+
         // IMPORTANT: Immediately check calendar state after stopping manual focus
         console.log("Triggering calendar check after stopping manual focus.");
         checkCalendarAndSetBlocking(); // See if calendar focus should start now
@@ -214,6 +258,7 @@ async function checkCalendarAndSetBlocking() {
             await updateBlockingRules(false, [], '', null);
             currentFocusState = false;
             updatePopupState('Focus Inactive', null);
+            await restoreBlockedTabs(); // *** Restore tabs AFTER disabling rules ***
         } else if (isInCalendarFocus /* && currentFocusState */) {
              console.log("--- Still IN CALENDAR focus mode.");
              updatePopupState('Focus Active (Calendar)', null);
@@ -237,6 +282,7 @@ async function checkCalendarAndSetBlocking() {
             if (currentFocusState) { // Transition out of focus if needed (must be calendar focus here)
                 await updateBlockingRules(false, [], '', null);
                 currentFocusState = false;
+                await restoreBlockedTabs(); // *** Attempt restore on error exit ***
             }
             updatePopupState('Auth Required', null); // Manual end time is null here
         } else if (error.message.includes('Rule Limit Exceeded')) {
@@ -246,6 +292,7 @@ async function checkCalendarAndSetBlocking() {
              if (currentFocusState) { // Ensure we transition *out* of a state we can't enforce
                  await updateBlockingRules(false, [], '', null);
                  currentFocusState = false;
+                 await restoreBlockedTabs(); // *** Attempt restore on error exit ***
              }
         } else {
             // General error
@@ -254,6 +301,7 @@ async function checkCalendarAndSetBlocking() {
             if (currentFocusState) {
                 try { await updateBlockingRules(false, [], '', null); } catch (cleanupError) {console.warn("Error during cleanup rules on general error:", cleanupError);}
                 currentFocusState = false;
+                await restoreBlockedTabs(); // *** Attempt restore on error exit ***
             }
         }
     }
@@ -268,6 +316,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     console.log(`Extension ${details.reason}.`);
     if (details.reason === 'install') {
         await initializeSettings(); // Set defaults
+        await clearBlockedTabs(); // Clear any stale map data on first install
     }
     // Always run check on install/update after a short delay
     // The initial load logic below handles more specific startup scenarios now
@@ -386,18 +435,36 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
 });
 
 
-// Tab Update Listener (URL change)
+// Tab Update Listener (for navigating away from block page)
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    // Check only when URL changes and focus mode is active (any type)
-    // Use changeInfo.url as it's often the most reliable indicator of the *new* URL
-    const manualEndTime = await getManualFocusEndTime(); // Check manual first
-    if ((currentFocusState || manualEndTime) && changeInfo.url) { // Check if *any* focus is active
-        const state = await loadStateFromStorage(); // Need current config
-        if (state.isEnabled) { // Double check enabled status
-             console.log(`[Tab Listener] Tab updated: ${tabId}, URL change detected: ${changeInfo.url}`);
-             checkAndBlockTabIfNeeded(tabId, changeInfo.url, state.sitesConfig, state.globalBlockMessage, state.redirectUrl);
+    // Only care about URL changes for existing tabs
+    if (changeInfo.url) {
+        const map = await getBlockedTabs();
+        // If this tab *was* blocked...
+        if (map[tabId]) {
+            const baseRedirectUrl = chrome.runtime.getURL('blocked.html').split('?')[0];
+            // ...but it navigated somewhere *else* (not just a parameter change on block page)
+            if (!changeInfo.url.startsWith(baseRedirectUrl)) {
+                console.log(`Tab ${tabId} navigated away from block page to ${changeInfo.url}. Removing from restore map.`);
+                removeBlockedTab(tabId);
+            }
         }
     }
+    // Existing blocking logic for active focus sessions
+    const manualEndTime = await getManualFocusEndTime();
+    if ((currentFocusState || manualEndTime) && changeInfo.url && tab) { // Ensure tab exists
+        const state = await loadStateFromStorage();
+        if (state.isEnabled) {
+            checkAndBlockTabIfNeeded(tabId, changeInfo.url, state.sitesConfig, state.globalBlockMessage, state.redirectUrl);
+        }
+    }
+});
+
+// Tab Closure Listener
+chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
+    // Remove the closed tab from our tracking map
+    console.log(`Tab ${tabId} removed.`);
+    removeBlockedTab(tabId);
 });
 
 // Tab Activation Listener (Switching Tabs)

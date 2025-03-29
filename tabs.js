@@ -1,6 +1,8 @@
 // tabs.js
 import { isUrlBlocked } from './utils.js';
 import { defaultGlobalMessageForBG } from './constants.js';
+import { addBlockedTab } from './state.js';
+
 
 /**
  * Redirects a specific tab if its URL matches a blocked site during focus mode.
@@ -11,25 +13,42 @@ import { defaultGlobalMessageForBG } from './constants.js';
  * @param {string} redirectUrl - Base URL of the blocked page.
  */
 export async function checkAndBlockTabIfNeeded(tabId, url, sitesConfig, globalBlockMessage, redirectUrl) {
-    // Skip if critical info is missing or URL is already the block page
     const baseRedirectUrl = redirectUrl ? redirectUrl.split('?')[0] : '';
     if (!url || !baseRedirectUrl || url.startsWith(baseRedirectUrl)) {
-        return;
+        return; // No need to block or track
     }
 
-    const blockResult = isUrlBlocked(url, sitesConfig); // Check against current config
+    const blockResult = isUrlBlocked(url, sitesConfig);
 
-    if (blockResult !== false) { // If it IS blocked (true or message string)
+    if (blockResult !== false) {
+        // *** Track the tab BEFORE redirecting ***
+        await addBlockedTab(tabId, url); // Pass the original URL
+        // ***************************************
+
         let finalMessage;
-        if (typeof blockResult === 'string') {
-            finalMessage = blockResult; // Use specific message
-        } else {
-            finalMessage = globalBlockMessage || defaultGlobalMessageForBG; // Use global fallback
-        }
+        // ... (determine message based on blockResult) ...
+        if (typeof blockResult === 'string') { finalMessage = blockResult; }
+        else { finalMessage = globalBlockMessage || defaultGlobalMessageForBG; }
 
-        // Encode the message and create the target URL
+        // Find the specific site config entry for allowed videos (needed if using grouped domains)
+        const siteEntry = sitesConfig.find(item => {
+             const blockedDomain = item.domain.toLowerCase();
+             const currentHostname = new URL(url).hostname.toLowerCase();
+             return currentHostname === blockedDomain || currentHostname.endsWith('.' + blockedDomain);
+        });
+        const allowedVideos = siteEntry?.allowedVideos || [];
+
         const encodedMessage = encodeURIComponent(finalMessage);
-        const targetUrl = `${baseRedirectUrl}?message=${encodedMessage}`;
+        let targetUrl = `${baseRedirectUrl}?message=${encodedMessage}`;
+
+        // Add allowed videos if applicable (using the found site entry)
+        if (allowedVideos.length > 0 && (siteEntry.domain === 'youtube.com' || siteEntry.domain === 'youtu.be')) {
+             try {
+                 const allowedVideosJson = JSON.stringify(allowedVideos);
+                 const encodedAllowedVideos = encodeURIComponent(allowedVideosJson);
+                 targetUrl += `&allowedVideos=${encodedAllowedVideos}`;
+             } catch (e) { /* handle error */ }
+        }
 
         console.log(`[Tab Blocker] BLOCKING Tab: ${tabId}, URL: ${url}. Redirecting...`);
         try {
@@ -39,11 +58,12 @@ export async function checkAndBlockTabIfNeeded(tabId, url, sitesConfig, globalBl
             if (!error.message.includes("No tab with id") && !error.message.includes("Cannot access") && !error.message.includes("Invalid tab ID")) {
                 console.error(`[Tab Blocker] Error updating tab ${tabId} to ${targetUrl}:`, error);
             } else {
-                 // console.log(`[Tab Blocker] Ignored error updating tab ${tabId} (likely closed): ${error.message}`);
+                // console.log(`[Tab Blocker] Ignored error updating tab ${tabId} (likely closed): ${error.message}`);
             }
         }
     }
 }
+
 
 /**
  * Checks all currently open tabs when focus mode starts.
