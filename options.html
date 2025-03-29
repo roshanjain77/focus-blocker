@@ -98,6 +98,16 @@
     <button id="save">Save All Settings</button>
     <div id="status"></div>
 
+    <!-- ** NEW: Import/Export Section ** -->
+    <div class="io-section">
+        <h2>Import / Export Settings</h2>
+        <button id="export-button">Export Settings</button>
+        <button id="import-button">Import Settings</button>
+        <input type="file" id="import-file-input" accept=".json">
+        <div id="import-status"></div>
+    </div>
+    <!-- ****************************** -->
+
 
     <!-- Hidden Template for Site Entries -->
     <template id="site-entry-template">
@@ -114,9 +124,9 @@
 
             <!-- ** NEW: Allowed Videos Section ** -->
             <div class="allowed-videos-section">
-                <label for="allowed-videos">Allowed YouTube Video IDs (one per line):</label>
-                <textarea class="allowed-videos" placeholder="dQw4w9WgXcQ
-kfchvCyHmsc"></textarea>
+                <label for="allowed-videos">Allowed YouTube Videos (one per line: `VIDEO_ID | Display Name`):</label>
+                <textarea class="allowed-videos" placeholder="dQw4w9WgXcQ | My Favorite Song
+kfchvCyHmsc | Important Tutorial"></textarea>
                 <p class="help-text"><small>Only applies if 'youtube.com' or 'youtu.be' is listed above.</small></p>
             </div>
             <!-- ****************************** -->

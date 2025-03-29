@@ -6,7 +6,7 @@ import { extractDomain } from './utils.js';
  * Loads settings from chrome.storage.sync, applies defaults, processes domains, and validates.
  * @returns {Promise<{
  *   isEnabled: boolean,
- *   sitesConfig: Array<{domain: string, message: string|null}>, // Processed list
+ *   sitesConfig: [], // Array<{domain: string, message: string|null, allowedVideos: Array<{id: string, name: string}>}>
  *   blockedDomains: string[], // Derived from processed list
  *   globalBlockMessage: string,
  *   focusKeyword: string,
@@ -41,20 +41,18 @@ export async function loadStateFromStorage() {
             const domainString = item.domain || '';
             const message = item.message || null;
             // Get allowedVideoIds from raw item, default to empty array
-            const allowedVideoIds = Array.isArray(item.allowedVideoIds) ? item.allowedVideoIds : [];
+            const allowedVideos = Array.isArray(item.allowedVideos) ? item.allowedVideos : [];
             const processedEntries = [];
 
             domainString.split(',')
-                .map(part => part.trim())
-                .filter(trimmedPart => trimmedPart !== '')
+                .map(part => part.trim()).filter(p => p)
                 .forEach(potentialDomain => {
                     const validDomain = extractDomain(potentialDomain);
                     if (validDomain) {
-                        // Add entry with the VALID domain and the SHARED message/video IDs
                         processedEntries.push({
                              domain: validDomain,
                              message: message,
-                             allowedVideoIds: allowedVideoIds // Pass along the video IDs
+                             allowedVideos: allowedVideos // Pass along the object array
                         });
                     } else {
                         console.warn(`Invalid domain found and skipped: "${potentialDomain}" from input "${domainString}"`);
@@ -82,15 +80,15 @@ export async function loadStateFromStorage() {
         state.sitesConfig = defaultSitesConfigForBG.flatMap(item => {
             const domainString = item.domain || '';
             const message = item.message || null;
-            const allowedVideoIds = Array.isArray(item.allowedVideoIds) ? item.allowedVideoIds : []; // Handle defaults too
+            const allowedVideos = Array.isArray(item.allowedVideos) ? item.allowedVideos : []; // Handle defaults structure
             return domainString.split(',')
                 .map(part => part.trim()).filter(p => p)
                 .map(potentialDomain => extractDomain(potentialDomain))
                 .filter(validDomain => validDomain)
-                .map(validDomain => ({ domain: validDomain, message: message, allowedVideoIds: allowedVideoIds })); // Include IDs in defaults processing
+                .map(validDomain => ({ domain: validDomain, message: message, allowedVideos: allowedVideos })); // Include allowedVideos
         });
         state.blockedDomains = state.sitesConfig.map(item => item.domain);
-        console.warn("Applied default state due to loading error. Processed default domains:", state.blockedDomains);
+       console.warn("Applied default state due to loading error. Processed default domains:", state.blockedDomains);
     }
     return state;
 }

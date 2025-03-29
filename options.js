@@ -61,7 +61,7 @@ authorizeButton.addEventListener('click', () => {
 // --- Site List UI Management ---
 
 // Creates a DOM element for a single site entry
-function createSiteEntryElement(domainString = '', message = '', allowedVideoIds = []) { // Added allowedVideoIds
+function createSiteEntryElement(domainString = '', message = '', allowedVideos = []) { // Added allowedVideoIds
     const content = siteEntryTemplate.content.cloneNode(true);
     const siteEntryDiv = content.querySelector('.site-entry');
     const domainInput = content.querySelector('.site-domain');
@@ -72,7 +72,10 @@ function createSiteEntryElement(domainString = '', message = '', allowedVideoIds
 
     domainInput.value = domainString;
     messageTextarea.value = message || '';
-    allowedVideosTextarea.value = allowedVideoIds.join('\n'); // Join IDs with newlines for textarea
+    const allowedVideosString = allowedVideos
+        .map(video => `${video.id} | ${video.name}`)
+        .join('\n');
+    allowedVideosTextarea.value = allowedVideosString;
 
     // --- Logic to show/hide Allowed Videos section ---
     const toggleAllowedVideosVisibility = () => {
@@ -101,7 +104,7 @@ function renderSitesList(rawConfig) {
     sitesListContainer.innerHTML = '';
     rawConfig.forEach(item => {
         // Pass raw domain string and allowed IDs (ensure it's an array)
-        const element = createSiteEntryElement(item.domain, item.message, item.allowedVideoIds || []);
+        const element = createSiteEntryElement(item.domain, item.message, item.allowedVideos || []);
         sitesListContainer.appendChild(element);
     });
 }
@@ -134,19 +137,29 @@ saveButton.addEventListener('click', () => {
         const message = messageTextarea.value.trim() || null;
 
         // Process Allowed Video IDs
-        const rawVideoIds = allowedVideosTextarea.value.trim();
-        const allowedVideoIds = rawVideoIds
-            ? rawVideoIds.split(/[\n,]+/) // Split by newline OR comma
-                  .map(id => id.trim())
-                  .filter(id => /^[a-zA-Z0-9_-]{11}$/.test(id)) // Basic validation: 11 chars, YT charset
-            : []; // Empty array if textarea is empty
+        const rawVideosInput = allowedVideosTextarea.value.trim();
+        const allowedVideos = []; // Array of {id, name} objects
+        if (rawVideosInput) {
+            rawVideosInput.split('\n').forEach(line => {
+                const parts = line.split('|');
+                const id = parts[0]?.trim();
+                const name = parts[1]?.trim() || id; // Use ID as name if name part is missing
+
+                // Validate ID format
+                if (id && /^[a-zA-Z0-9_-]{11}$/.test(id)) {
+                    allowedVideos.push({ id: id, name: name });
+                } else if (id) { // Log if ID was present but invalid
+                    console.warn(`Invalid YouTube ID format skipped: "${id}"`);
+                }
+            });
+        }
 
         if (domainString) {
             // Store the potentially comma-separated string and the processed video IDs
             newRawSitesConfig.push({
                 domain: domainString,
                 message: message,
-                allowedVideoIds: allowedVideoIds // Store the cleaned array
+                allowedVideos: allowedVideos // Store the cleaned array
             });
             domainInput.style.borderColor = '';
         } else {

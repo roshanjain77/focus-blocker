@@ -5,7 +5,7 @@ import { defaultGlobalMessageForBG } from './constants.js'; // Import default me
 /**
  * Updates DNR rules. Redirect URL will include encoded message and allowed video IDs if applicable.
  * @param {boolean} shouldBlock - Enable/disable blocking.
- * @param {Array<{domain: string, message: string|null, allowedVideoIds: string[]}>} sitesConfig - Processed config.
+ * @param {Array<{domain: string, message: string|null, allowedVideos: Array<{id: string, name: string}>}>} sitesConfig - Processed config.
  * @param {string} globalBlockMessage - Fallback message.
  * @param {string} redirectUrl - Base blocked page URL.
  */
@@ -42,12 +42,18 @@ export async function updateBlockingRules(shouldBlock, sitesConfig, globalBlockM
                 // **********************************************************
 
                 // Check if it's YouTube and has allowed videos
-                if ((site.domain === 'youtube.com' || site.domain === 'youtu.be') && site.allowedVideoIds.length > 0) {
-                    const encodedVideos = encodeURIComponent(site.allowedVideoIds.join(',')); // Join IDs with comma for URL param
-                    targetUrl += `&videos=${encodedVideos}`; // Append video IDs parameter
-                    console.log(`${logPrefix} Adding allowed videos to rule for ${site.domain}: ${site.allowedVideoIds.length} videos`);
+                if ((site.domain === 'youtube.com' || site.domain === 'youtu.be') && site.allowedVideos.length > 0) {
+                    try {
+                        const allowedVideosJson = JSON.stringify(site.allowedVideos);
+                        const encodedAllowedVideos = encodeURIComponent(allowedVideosJson);
+                        targetUrl += `&allowedVideos=${encodedAllowedVideos}`; // Use new param name
+                        console.log(`${logPrefix} Adding allowed videos JSON to rule for ${site.domain}`);
+                    } catch (e) {
+                         console.error(`Error stringifying allowedVideos for ${site.domain}:`, e);
+                         // Proceed without the allowedVideos parameter if encoding fails
+                    }
                 }
-
+    
 
                 const ruleId = FOCUS_RULE_ID_START + index;
                 rulesToAdd.push({

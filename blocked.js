@@ -9,7 +9,7 @@ const fallbackHtml = '<h1>Site Blocked</h1><p>This site is blocked during your s
 try {
     const params = new URLSearchParams(window.location.search);
     const encodedMessage = params.get('message');
-    const encodedVideos = params.get('videos'); // Get the new videos parameter
+    const encodedAllowedVideos = params.get('allowedVideos');
 
     // --- 1. Render Main Message (Sanitized) ---
     let rawMessage = fallbackHtml;
@@ -47,36 +47,37 @@ try {
     }
 
     // --- 2. Process and Display Allowed Videos ---
-    if (encodedVideos) {
+    if (encodedAllowedVideos) { // *** Check new param name ***
         try {
-            const decodedVideos = decodeURIComponent(encodedVideos);
-            const videoIds = decodedVideos.split(',').filter(id => id.trim() !== ''); // Split by comma
+            const allowedVideosJson = decodeURIComponent(encodedAllowedVideos);
+            const allowedVideos = JSON.parse(allowedVideosJson); // *** Parse the JSON ***
 
-            if (videoIds.length > 0) {
-                allowedVideosListElement.innerHTML = ''; // Clear previous (if any)
-                videoIds.forEach(videoId => {
-                    // Create a clickable element for each video
+            if (Array.isArray(allowedVideos) && allowedVideos.length > 0) {
+                allowedVideosListElement.innerHTML = '';
+                allowedVideos.forEach(video => { // *** Iterate through array of objects ***
+                    if (!video.id || !video.name) return; // Skip invalid entries
+
                     const videoItem = document.createElement('div');
                     videoItem.classList.add('allowed-video-item');
-                    videoItem.textContent = `Watch Allowed Video (ID: ${videoId})`; // Simple text
-                    videoItem.dataset.videoId = videoId; // Store ID in data attribute
-                    videoItem.setAttribute('role', 'button'); // Accessibility
-                    videoItem.setAttribute('tabindex', '0'); // Make it focusable
+                    // *** Use video.name for display text ***
+                    videoItem.textContent = video.name;
+                    // *** Still use video.id for the data attribute ***
+                    videoItem.dataset.videoId = video.id;
+                    videoItem.setAttribute('role', 'button');
+                    videoItem.setAttribute('tabindex', '0');
 
                     videoItem.addEventListener('click', playVideo);
-                    videoItem.addEventListener('keydown', (e) => { // Allow activation with Enter/Space
-                        if (e.key === 'Enter' || e.key === ' ') {
-                             e.preventDefault(); // Prevent page scroll on Space
-                             playVideo.call(videoItem); // Call playVideo with 'this' set to the item
-                        }
-                    });
+                    videoItem.addEventListener('keydown', (e) => { /* ... */ });
 
                     allowedVideosListElement.appendChild(videoItem);
                 });
-                allowedVideosContainer.style.display = 'block'; // Show the section
+                allowedVideosContainer.style.display = 'block';
             }
         } catch (e) {
-            console.error("Error processing allowed videos parameter:", e);
+            console.error("Error processing allowed videos JSON parameter:", e);
+            // You might want to display an error to the user here
+            allowedVideosListElement.innerHTML = '<p style="color: red;">Error loading allowed videos list.</p>';
+            allowedVideosContainer.style.display = 'block';
         }
     }
 
