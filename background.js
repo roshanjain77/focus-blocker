@@ -210,11 +210,12 @@ async function checkCalendarAndSetBlocking() {
                    console.log("Transitioning OUT OF focus due to missing auth.");
                    await updateBlockingRules(false, [], '', null);
                    currentFocusState = false;
+                   await restoreBlockedTabs(); // Attempt restore on error exit
                    currentActiveProfileName = null; // Reset active profile
                 }
-               updatePopupState('Auth Required', null);
-               // Don't clear calendar alarm, user might authorize soon
-               return; // Stop calendar check
+                updatePopupState('Auth Required', null);
+                // Don't clear calendar alarm, user might authorize soon
+                return; // Stop calendar check
             }
         }
 
@@ -226,6 +227,7 @@ async function checkCalendarAndSetBlocking() {
                 console.log("Transitioning OUT OF focus due to disabling.");
                 await updateBlockingRules(false, [], '', null);
                 currentFocusState = false;
+                await restoreBlockedTabs(); // Attempt restore on error exit
             }
             updatePopupState('Disabled', null); // Ensure manual time is null
             clearAlarm(); // Clear calendar alarm
@@ -249,14 +251,16 @@ async function checkCalendarAndSetBlocking() {
 
             if (activeProfileName) { // Transitioning INTO a profile (or changing profile)
                     console.log(`>>> Activating profile: ${activeProfileName}`);
+                    await updateBlockingRules(false, [], '', null);
+                    currentFocusState = false;
+                    await restoreBlockedTabs(); // Attempt restore on error exit
+    
                     await updateBlockingRules(true, rulesForProfile, state.globalBlockMessage, state.redirectUrl); // Pass FILTERED rules
                     currentFocusState = true; // Still useful for simple checks
                     currentActiveProfileName = activeProfileName;
                     updatePopupState(`Focus Active (${activeProfileName})`, manualEndTime);
                     // Check tabs only when *starting* a focus session from inactive
-                    if (currentActiveProfileName === null) { // Check if previous state was null
-                        await checkExistingTabs(rulesForProfile, state.globalBlockMessage, state.redirectUrl); // Pass FILTERED rules
-                    }
+                    await checkExistingTabs(rulesForProfile, state.globalBlockMessage, state.redirectUrl); // Pass FILTERED rules
 
             } else { // Transitioning OUT OF focus (activeProfileName is null)
                     console.log(`<<< Deactivating profile: ${currentActiveProfileName}`);
@@ -272,12 +276,14 @@ async function checkCalendarAndSetBlocking() {
                 await updateBlockingRules(true, rulesForProfile, state.globalBlockMessage, state.redirectUrl); // Pass FILTERED rules
                 updatePopupState(`Focus Active (${activeProfileName})`, manualEndTime);
                 currentFocusState = true; // Ensure true
+                await checkExistingTabs(rulesForProfile, state.globalBlockMessage, state.redirectUrl); // Pass FILTERED rules
         } else {
                 // Still inactive
                 console.log(`--- Still inactive`);
                 if (currentFocusState) { // Safety check if state somehow got out of sync
                     await updateBlockingRules(false, [], state.globalBlockMessage, state.redirectUrl);
                     currentFocusState = false;
+                    await restoreBlockedTabs(); // Attempt restore on error exit
                 }
                 updatePopupState('Focus Inactive', null);
         }
@@ -292,13 +298,6 @@ async function checkCalendarAndSetBlocking() {
 
     } catch (error) {
         console.error('!!! Error during main check cycle:', error);
-
-        if (currentActiveProfileName) {
-            await updateBlockingRules(false, [], state.globalBlockMessage, state.redirectUrl); // Clear rules
-            await restoreBlockedTabs();
-        }
-        currentActiveProfileName = null;
-        currentFocusState = false;
 
         // Get manual end time again *inside* catch block in case it changed or initial read failed
         const currentManualEndTime = await getManualFocusEndTime();
@@ -331,6 +330,13 @@ async function checkCalendarAndSetBlocking() {
                 await restoreBlockedTabs(); // *** Attempt restore on error exit ***
             }
         }
+
+        if (currentActiveProfileName) {
+            await updateBlockingRules(false, [], state.globalBlockMessage, state.redirectUrl); // Clear rules
+            await restoreBlockedTabs();
+        }
+        currentActiveProfileName = null;
+        currentFocusState = false;
     }
     console.log("--- Finished CheckCalendarAndSetBlocking ---");
 }
