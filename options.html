@@ -4,84 +4,59 @@
     <title>Calendar Focus Blocker Options</title>
     <meta charset="UTF-8">
     <style>
-        body { font-family: sans-serif; padding: 20px; max-width: 700px; margin: auto; }
+        /* --- Basic & Existing Styles --- */
+        body { font-family: sans-serif; padding: 20px; max-width: 800px; margin: auto; }
         label { display: block; margin-top: 15px; font-weight: bold; }
         input[type="text"], textarea { width: 98%; padding: 8px; font-size: 1em; margin-top: 5px; border: 1px solid #ccc; border-radius: 4px; }
-        textarea { min-height: 60px; /* Smaller default height for messages */ }
+        textarea { min-height: 60px; }
         button { padding: 10px 15px; margin-top: 10px; cursor: pointer; font-size: 1em; border-radius: 4px; border: none; background-color: #4285f4; color: white; }
         button:hover { background-color: #357ae8; }
-        button.delete-button { background-color: #db4437; margin-left: 10px; padding: 5px 10px; font-size: 0.9em; }
+        button.delete-button, button.edit-button { background-color: #db4437; margin-left: 10px; padding: 5px 10px; font-size: 0.9em; }
         button.delete-button:hover { background-color: #c5372c; }
-        #status { margin-top: 15px; font-weight: bold; }
-        .setting-group { margin-bottom: 25px; border-bottom: 1px solid #eee; padding-bottom: 20px; }
-        .help-text { font-size: 0.9em; color: #555; margin-top: 3px; }
-
-        /* Styles for the dynamic site list */
-        #sites-list { margin-top: 10px; }
-        .site-entry {
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            padding: 15px;
-            margin-bottom: 15px;
-            background-color: #f9f9f9;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-        .site-entry-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .site-entry label { margin-top: 0; font-size: 0.95em; }
-        #add-site-button { background-color: #34a853; margin-top: 15px; }
-        #add-site-button:hover { background-color: #2c8f46; }
-        .allowed-videos-section {
-            margin-top: 15px;
-            padding-top: 10px;
-            border-top: 1px dashed #ccc;
-            /* Initially hidden, shown by JS if YouTube is detected */
-            display: none;
-        }
-        .allowed-videos-section label {
-            font-size: 0.9em;
-            font-weight: normal;
-        }
-        .allowed-videos-section textarea {
-            min-height: 40px;
-            font-family: monospace;
-            font-size: 0.9em;
-        }
-
-        .io-section {
-            margin-top: 30px;
-            padding-top: 20px;
-            border-top: 1px solid #eee;
-        }
-        .io-section button {
-            background-color: #707070;
-            margin-right: 10px;
-        }
-        .io-section button:hover {
-            background-color: #5a5a5a;
-        }
-        #import-status {
-            margin-top: 10px;
-            font-size: 0.9em;
-        }
+        button.edit-button { background-color: #f4b400; } /* Orange for edit */
+        button.edit-button:hover { background-color: #db9f00; }
+        button.cancel-button { background-color: #707070; }
+        button.cancel-button:hover { background-color: #5a5a5a; }
+        #status, #import-status { margin-top: 15px; font-weight: bold; font-size: 0.9em; }
         #import-status.success { color: green; }
         #import-status.error { color: red; }
-        /* Hide the actual file input */
+        .setting-group { margin-bottom: 25px; border-bottom: 1px solid #eee; padding-bottom: 20px; }
+        .help-text { font-size: 0.9em; color: #555; margin-top: 3px; }
         #import-file-input { display: none; }
 
+        /* --- Profile Section Styles --- */
+        #profiles-section ul { list-style: none; padding: 0; }
+        #profiles-section li { border: 1px solid #ddd; border-radius: 5px; padding: 10px 15px; margin-bottom: 10px; background-color: #f9f9f9; display: flex; justify-content: space-between; align-items: center; }
+        #profiles-section li span { font-size: 0.9em; color: #444; }
+        #profiles-section li strong { color: #000; }
+        #add-profile-form { margin-top: 15px; padding: 15px; border: 1px dashed #ccc; border-radius: 5px; background-color: #fafafa; }
+        #add-profile-form input[type="text"] { width: 95%; }
+        #add-profile-form button { margin-right: 5px; }
 
+        /* --- Site Entry Styles --- */
+        #sites-list { margin-top: 10px; }
+        .site-entry { border: 1px solid #ddd; border-radius: 5px; padding: 15px; margin-bottom: 15px; background-color: #f9f9f9; display: flex; flex-direction: column; gap: 10px; }
+        .site-entry-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .site-entry label { margin-top: 0; font-size: 0.95em; }
+        .site-entry input[type="text"].disabled, .site-entry textarea.disabled { background-color: #eee; cursor: not-allowed; }
+        #add-site-button { background-color: #34a853; margin-top: 15px; }
+        #add-site-button:hover { background-color: #2c8f46; }
+        .block-all-section { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; margin-top: 10px; border-top: 1px dashed #ccc; padding-top: 10px; }
+        .block-all-section label { margin-top: 0; font-weight: normal; }
+        .profiles-assignment-section { margin-top: 10px; border-top: 1px dashed #ccc; padding-top: 10px; }
+        .profiles-assignment-section label { font-weight: normal; font-size: 0.95em; margin-bottom: 5px;}
+        .profiles-assignment-section div { display: flex; flex-wrap: wrap; gap: 15px; }
+        .profiles-assignment-section div span { /* Container for checkbox + label */ display: inline-flex; align-items: center; gap: 5px; }
+        .profiles-assignment-section div span label { /* Label next to checkbox */ font-weight: normal; font-size: 0.9em; margin-top: 0; }
+        .allowed-videos-section { margin-top: 15px; padding-top: 10px; border-top: 1px dashed #ccc; display: block; /* Now always visible, but might be disabled */ }
+        .allowed-videos-section textarea { min-height: 40px; font-family: monospace; font-size: 0.9em; }
     </style>
 </head>
 <body>
     <h1>Calendar Focus Blocker Options</h1>
 
-    <!-- Enable toggle, Authorization, Focus Keyword (Keep as before) -->
-     <div class="setting-group">
+    <!-- --- General Settings --- -->
+    <div class="setting-group">
         <label>Enable Extension:</label>
         <input type="checkbox" id="enable-toggle">
     </div>
@@ -89,38 +64,53 @@
         <label for="auth-status">Google Calendar Authorization:</label>
         <span id="auth-status">Checking...</span>
         <button id="authorize">Authorize / Re-authorize</button>
-        <p class="help-text"><small>Requires read-only access to your primary calendar.</small></p>
-    </div>
-    <div class="setting-group">
-        <label for="focusKeyword">Focus Event Keyword:</label>
-        <input type="text" id="focusKeyword">
-        <p class="help-text"><small>Events with this text trigger blocking (e.g., "[Focus]").</small></p>
+        <p class="help-text"><small>Required for calendar-based profiles. Read-only access.</small></p>
     </div>
 
-    <!-- == NEW DYNAMIC SITES UI == -->
+    <!-- --- Profiles Management --- -->
+    <div id="profiles-section" class="setting-group">
+        <h2>Focus Profiles</h2>
+        <p class="help-text">Define different focus modes. Assign rules below to one or more profiles. The keyword triggers blocking based on Google Calendar events. Leave keyword blank for manual-only profiles (like the default 'Manual').</p>
+        <ul id="profiles-list">
+            <!-- Profiles will be loaded here -->
+        </ul>
+        <div id="add-profile-form">
+            <h3 id="profile-form-title">Add New Profile</h3>
+            <input type="hidden" id="profile-edit-name" value=""> <!-- Store name being edited -->
+            <div>
+                <label for="profile-name">Profile Name:</label>
+                <input type="text" id="profile-name" placeholder="e.g., Focus Work">
+            </div>
+            <div>
+                <label for="profile-keyword">Calendar Keyword (Optional):</label>
+                <input type="text" id="profile-keyword" placeholder="e.g., [Focus] or [Sleep]">
+            </div>
+            <button id="save-profile-button">Save Profile</button>
+            <button id="cancel-profile-button" class="cancel-button" style="display: none;">Cancel Edit</button>
+        </div>
+    </div>
+
+    <!-- --- Site Blocking Rules --- -->
     <div class="setting-group">
-        <label>Blocked Websites & Custom Messages</label>
-        <!-- MODIFY HELP TEXT HERE -->
-        <p class="help-text">Define sites to block. Enter domains separated by commas (e.g., youtube.com, youtu.be) to apply the same message to multiple sites. If no custom message is set, the global message is used.</p>
+        <label>Blocked Websites & Rules</label>
+        <p class="help-text">Define rules and assign them to profiles. Rules are checked in order; a "Block All" rule will override specific domain rules within the same active profile.</p>
         <div id="sites-list">
             <!-- Site entries will be loaded here -->
         </div>
-        <button id="add-site-button">+ Add Site Entry</button>
+        <button id="add-site-button">+ Add Blocking Rule</button>
     </div>
-    <!-- ... -->
 
-    <!-- ============================ -->
-
+    <!-- --- Global Settings --- -->
     <div class="setting-group">
         <label for="globalBlockMessageInput">Global Block Message (Fallback HTML)</label>
         <textarea id="globalBlockMessageInput"></textarea>
-         <p class="help-text">This HTML message is shown for blocked sites without a specific custom message.</p>
+         <p class="help-text">Shown if a blocked site/rule doesn't have a custom message.</p>
     </div>
 
-    <button id="save">Save All Settings</button>
+    <!-- --- Save All & Import/Export --- -->
+    <button id="save">Save All Settings & Rules</button>
     <div id="status"></div>
 
-    <!-- ** NEW: Import/Export Section ** -->
     <div class="io-section">
         <h2>Import / Export Settings</h2>
         <button id="export-button">Export Settings</button>
@@ -128,34 +118,68 @@
         <input type="file" id="import-file-input" accept=".json">
         <div id="import-status"></div>
     </div>
-    <!-- ****************************** -->
 
+    <!-- --- TEMPLATES --- -->
 
-    <!-- Hidden Template for Site Entries -->
+    <!-- Profile List Item Template -->
+    <template id="profile-list-item-template">
+        <li>
+            <div>
+                <strong></strong> <!-- Profile Name -->
+                <span></span> <!-- Keyword Info -->
+            </div>
+            <div>
+                <button class="edit-button">Edit</button>
+                <button class="delete-button">Delete</button>
+            </div>
+        </li>
+    </template>
+
+    <!-- Site Entry Template -->
     <template id="site-entry-template">
         <div class="site-entry">
+            <input type="hidden" class="site-entry-id"> <!-- Unique ID -->
             <div class="site-entry-header">
-                 <!-- MODIFY LABEL HERE -->
-                 <label>Website Domain(s) (comma-separated):</label>
-                 <button class="delete-button">Delete</button>
+                 <label>Rule Configuration:</label>
+                 <button class="delete-button">Delete Rule</button>
             </div>
-             <!-- MODIFY PLACEHOLDER HERE -->
-            <input type="text" class="site-domain" placeholder="e.g., youtube.com, youtu.be, facebook.com">
-            <label>Custom HTML Message (Optional):</label>
-            <textarea class="site-message" placeholder="e.g., Let's be <b>PRODUCTIVE</b>!"></textarea>
 
-            <!-- ** NEW: Allowed Videos Section ** -->
+            <!-- Block All Checkbox -->
+            <div class="block-all-section">
+                 <input type="checkbox" class="block-all-checkbox">
+                 <label>Block All Websites (for selected profiles)</label>
+            </div>
+
+            <!-- Domain Input (disabled if blockAll is checked) -->
+            <div>
+                 <label>Website Domain(s) (comma-separated):</label>
+                 <input type="text" class="site-domain" placeholder="e.g., youtube.com, youtu.be">
+            </div>
+
+            <!-- Custom Message -->
+            <div>
+                 <label>Custom HTML Message (Optional):</label>
+                 <textarea class="site-message" placeholder="Enter custom block message..."></textarea>
+            </div>
+
+            <!-- Allowed Videos (disabled if blockAll is checked) -->
             <div class="allowed-videos-section">
-                <label for="allowed-videos">Allowed YouTube Videos (one per line: `VIDEO_ID | Display Name`):</label>
+                <label>Allowed YouTube Videos (one per line: `VIDEO_ID | Display Name`):</label>
                 <textarea class="allowed-videos" placeholder="dQw4w9WgXcQ | My Favorite Song
 kfchvCyHmsc | Important Tutorial"></textarea>
-                <p class="help-text"><small>Only applies if 'youtube.com' or 'youtu.be' is listed above.</small></p>
+                <p class="help-text"><small>Only applies if 'youtube.com' or 'youtu.be' is listed in domains.</small></p>
             </div>
-            <!-- ****************************** -->
-            
+
+            <!-- Profile Assignment -->
+            <div class="profiles-assignment-section">
+                 <label>Assign to Profiles:</label>
+                 <div class="profile-checkboxes-container">
+                     <!-- Profile checkboxes will be added here by JS -->
+                 </div>
+            </div>
+
         </div>
     </template>
-    <!-- ... -->
 
     <script src="options.js"></script>
 </body>

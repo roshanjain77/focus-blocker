@@ -3,13 +3,14 @@ import * as constants from './constants.js';
 // Import state functions for manual focus time
 import { getBlockedTabs, removeBlockedTab, clearBlockedTabs, loadStateFromStorage, initializeSettings, getManualFocusEndTime, setManualFocusEndTime, clearManualFocusEndTime, updatePopupState } from './state.js';
 import { getAuthToken, removeCachedAuthToken } from './auth.js';
-import { isCurrentlyInFocusEvent } from './calendar.js';
+import { getActiveFocusProfileName } from './calendar.js';
 import { updateBlockingRules } from './blocking.js';
 import { checkAndBlockTabIfNeeded, checkExistingTabs } from './tabs.js';
 
 // --- Global State ---
 // currentFocusState useful for quick checks in listeners & transition logic
 let currentFocusState = false;
+let currentActiveProfileName = null; // Track the currently active profile name
 
 // --- Helper function to restore tabs ---
 async function restoreBlockedTabs() {
@@ -125,15 +126,23 @@ async function startManualFocus(durationMinutes) {
     const endTime = now + durationMinutes * 60 * 1000;
     await setManualFocusEndTime(endTime);
 
-    // 4. Activate blocking
     console.log(">>> Starting MANUAL focus mode.");
-    const state = await loadStateFromStorage(); // Get blocking config
+    const state = await loadStateFromStorage(); // Get all configs
+
+    // Filter rules specifically for "Manual" profile
+    const manualProfileName = "Manual"; // Assuming this exists in profilesConfig
+    const rulesForManual = state.processedSitesConfig.filter(rule =>
+        rule.profiles.includes(manualProfileName)
+    );
+    console.log(`Applying ${rulesForManual.length} rules for profile: "${manualProfileName}"`);
+
     try {
-        await updateBlockingRules(true, state.sitesConfig, state.globalBlockMessage, state.redirectUrl);
-        currentFocusState = true; // Set state AFTER rules applied
-        updatePopupState('Manual Focus Active', endTime);
-        await checkExistingTabs(state.sitesConfig, state.globalBlockMessage, state.redirectUrl);
-        createManualEndAlarm(endTime); // Create the alarm to end it
+        await updateBlockingRules(true, rulesForManual, state.globalBlockMessage, state.redirectUrl); // Apply manual rules
+        currentActiveProfileName = manualProfileName; // Set active profile
+        currentFocusState = true;
+        updatePopupState(`Focus Active (Manual)`, endTime);
+        await checkExistingTabs(rulesForManual, state.globalBlockMessage, state.redirectUrl); // Check tabs with manual rules
+        createManualEndAlarm(endTime);
     } catch (error) {
         console.error("!!! Error starting manual focus:", error);
         updatePopupState('Error starting focus');
@@ -154,21 +163,20 @@ async function stopManualFocus() {
     }
 
     console.log("<<< Stopping MANUAL focus mode.");
-    await clearManualEndAlarm(); // Clear the specific end alarm
-    await clearManualFocusEndTime(); // Clear stored end time
+    await clearManualEndAlarm();
+    await clearManualFocusEndTime();
 
-    // Deactivate blocking rules
+    console.log("<<< Stopping MANUAL focus mode.");
+    currentActiveProfileName = null; // Clear active profile BEFORE check
+
     try {
-        await updateBlockingRules(false, [], '', null);
-        currentFocusState = false; // Update internal state AFTER rules removed
-        updatePopupState('Focus Inactive', null); // Update popup state
+        await updateBlockingRules(false, [], '', null); // Clear rules first
+        currentFocusState = false;
+        updatePopupState('Focus Inactive', null);
+        await restoreBlockedTabs();
 
-        await restoreBlockedTabs(); // *** Restore tabs AFTER disabling rules ***
-
-        // IMPORTANT: Immediately check calendar state after stopping manual focus
         console.log("Triggering calendar check after stopping manual focus.");
-        checkCalendarAndSetBlocking(); // See if calendar focus should start now
-
+        checkCalendarAndSetBlocking(); // Check if calendar should take over
     } catch (error) {
         console.error("!!! Error stopping manual focus:", error);
         updatePopupState('Error stopping focus', null); // Keep end time null
@@ -179,36 +187,40 @@ async function stopManualFocus() {
 
 // --- Main Calendar Checking and State Logic (Modified) ---
 async function checkCalendarAndSetBlocking() {
-    console.log("--- Running CheckCalendarAndSetBlocking ---");
-
-    let state;
-    let token = null;
-    let activeManualEndTime = await getManualFocusEndTime(); // Check manual focus first
+    console.log("--- Running Check Check ---");
+    let state = await loadStateFromStorage(); // Contains profilesConfig and processedSitesConfig
+    let manualEndTime = await getManualFocusEndTime();
+    let activeProfileName = null; // Profile for *this* check cycle
+    let rulesForProfile = [];
 
     try {
-        state = await loadStateFromStorage(); // Load current settings and state
-
-        // --- Manual Focus Check ---
-        if (activeManualEndTime) {
-            console.log("Manual focus session is active until:", new Date(activeManualEndTime));
-            if (!currentFocusState) {
-                // If SW restarted, ensure focus state and rules are correct
-                console.log("Correcting focus state & rules due to active manual session.");
-                // Apply rules - state loaded above has the necessary config
-                await updateBlockingRules(true, state.sitesConfig, state.globalBlockMessage, state.redirectUrl);
-                currentFocusState = true;
-                 // Don't check existing tabs here, assume they were checked on manual start
+        // 1. Check Manual Focus Override
+        if (manualEndTime) {
+            console.log("Manual focus session is active.");
+            activeProfileName = "Manual"; // Assign special name
+        }
+        // 2. Check Calendar (only if manual is not active)
+        else if (state.isEnabled) {
+            const token = await getAuthToken(false);
+            if (token) {
+                activeProfileName = await getActiveFocusProfileName(token, state.profilesConfig);
+            } else {
+                console.warn('Auth token not available. Needs authorization.');
+                if (currentActiveProfileName) { // Must have been calendar focus
+                   console.log("Transitioning OUT OF focus due to missing auth.");
+                   await updateBlockingRules(false, [], '', null);
+                   currentFocusState = false;
+                   currentActiveProfileName = null; // Reset active profile
+                }
+               updatePopupState('Auth Required', null);
+               // Don't clear calendar alarm, user might authorize soon
+               return; // Stop calendar check
             }
-            updatePopupState('Manual Focus Active', activeManualEndTime);
-            // Ensure the end alarm is set (in case SW restarted)
-            createManualEndAlarm(activeManualEndTime);
-            // ** Do not proceed to calendar check if manual focus is active **
-            console.log("--- Finished CheckCalendarAndSetBlocking (Manual Active) ---");
-            return;
         }
 
         // --- Proceed with Calendar Check (if not in manual focus) ---
         if (!state.isEnabled) {
+            activeProfileName = null; // Ensure no profile is active if disabled
             console.log("Check skipped: Extension is disabled.");
             if (currentFocusState) { // If it *was* in focus (must have been calendar)
                 console.log("Transitioning OUT OF focus due to disabling.");
@@ -217,9 +229,60 @@ async function checkCalendarAndSetBlocking() {
             }
             updatePopupState('Disabled', null); // Ensure manual time is null
             clearAlarm(); // Clear calendar alarm
-             await clearManualEndAlarm(); // Also clear manual just in case
+            await clearManualEndAlarm(); // Also clear manual just in case
             return;
         }
+
+        // 4. Filter rules for the determined active profile
+        if (activeProfileName) {
+            rulesForProfile = state.processedSitesConfig.filter(rule =>
+                rule.profiles.includes(activeProfileName)
+            );
+            console.log(`Found ${rulesForProfile.length} rules for active profile: "${activeProfileName}"`);
+        } else {
+            rulesForProfile = []; // No active profile, no rules apply
+        }
+
+        // 5. Compare with previous state and update DNR
+        if (activeProfileName !== currentActiveProfileName) {
+            console.log(`Profile changing from "${currentActiveProfileName}" to "${activeProfileName}"`);
+
+            if (activeProfileName) { // Transitioning INTO a profile (or changing profile)
+                    console.log(`>>> Activating profile: ${activeProfileName}`);
+                    await updateBlockingRules(true, rulesForProfile, state.globalBlockMessage, state.redirectUrl); // Pass FILTERED rules
+                    currentFocusState = true; // Still useful for simple checks
+                    currentActiveProfileName = activeProfileName;
+                    updatePopupState(`Focus Active (${activeProfileName})`, manualEndTime);
+                    // Check tabs only when *starting* a focus session from inactive
+                    if (currentActiveProfileName === null) { // Check if previous state was null
+                        await checkExistingTabs(rulesForProfile, state.globalBlockMessage, state.redirectUrl); // Pass FILTERED rules
+                    }
+
+            } else { // Transitioning OUT OF focus (activeProfileName is null)
+                    console.log(`<<< Deactivating profile: ${currentActiveProfileName}`);
+                    await updateBlockingRules(false, [], state.globalBlockMessage, state.redirectUrl); // Clear rules
+                    currentFocusState = false;
+                    currentActiveProfileName = null;
+                    updatePopupState('Focus Inactive', null);
+                    await restoreBlockedTabs();
+            }
+        } else if (activeProfileName) {
+                // Still in the same profile, just ensure rules are up-to-date
+                console.log(`--- Still in profile: ${activeProfileName}`);
+                await updateBlockingRules(true, rulesForProfile, state.globalBlockMessage, state.redirectUrl); // Pass FILTERED rules
+                updatePopupState(`Focus Active (${activeProfileName})`, manualEndTime);
+                currentFocusState = true; // Ensure true
+        } else {
+                // Still inactive
+                console.log(`--- Still inactive`);
+                if (currentFocusState) { // Safety check if state somehow got out of sync
+                    await updateBlockingRules(false, [], state.globalBlockMessage, state.redirectUrl);
+                    currentFocusState = false;
+                }
+                updatePopupState('Focus Inactive', null);
+        }
+
+       
 
         if (!state.redirectUrl) {
             console.error("Redirect URL is not set. Cannot perform check.");
@@ -227,52 +290,16 @@ async function checkCalendarAndSetBlocking() {
             return; // Cannot proceed
         }
 
-        console.log('Checking authorization token...');
-        token = await getAuthToken(false);
-
-        if (!token) {
-            console.warn('Auth token not available. Needs authorization.');
-             if (currentFocusState) { // Must have been calendar focus
-                console.log("Transitioning OUT OF focus due to missing auth.");
-                await updateBlockingRules(false, [], '', null);
-                currentFocusState = false;
-             }
-            updatePopupState('Auth Required', null);
-            // Don't clear calendar alarm, user might authorize soon
-            return; // Stop calendar check
-        }
-
-        console.log('Checking Google Calendar...');
-        const isInCalendarFocus = await isCurrentlyInFocusEvent(token, state.focusKeyword);
-
-        // --- State Transition Logic (Calendar Only) ---
-        if (isInCalendarFocus && !currentFocusState) {
-            console.log(">>> Transitioning INTO CALENDAR focus mode.");
-            await updateBlockingRules(true, state.sitesConfig, state.globalBlockMessage, state.redirectUrl);
-            currentFocusState = true;
-            updatePopupState('Focus Active (Calendar)', null); // Specific status, null manual time
-            await checkExistingTabs(state.sitesConfig, state.globalBlockMessage, state.redirectUrl);
-        } else if (!isInCalendarFocus && currentFocusState) {
-            // This implies calendar focus is ending, and we already know manual isn't active
-            console.log("<<< Transitioning OUT OF CALENDAR focus mode.");
-            await updateBlockingRules(false, [], '', null);
-            currentFocusState = false;
-            updatePopupState('Focus Inactive', null);
-            await restoreBlockedTabs(); // *** Restore tabs AFTER disabling rules ***
-        } else if (isInCalendarFocus /* && currentFocusState */) {
-             console.log("--- Still IN CALENDAR focus mode.");
-             updatePopupState('Focus Active (Calendar)', null);
-             // Re-apply rules as a safety net / config update check
-             await updateBlockingRules(true, state.sitesConfig, state.globalBlockMessage, state.redirectUrl);
-        } else /* (!isInCalendarFocus && !currentFocusState) */ {
-             console.log("--- Still OUT of focus mode.");
-             updatePopupState('Focus Inactive', null);
-             // Ensure rules remain removed (safety net)
-             await updateBlockingRules(false, [], '', null);
-        }
-
     } catch (error) {
         console.error('!!! Error during main check cycle:', error);
+
+        if (currentActiveProfileName) {
+            await updateBlockingRules(false, [], state.globalBlockMessage, state.redirectUrl); // Clear rules
+            await restoreBlockedTabs();
+        }
+        currentActiveProfileName = null;
+        currentFocusState = false;
+
         // Get manual end time again *inside* catch block in case it changed or initial read failed
         const currentManualEndTime = await getManualFocusEndTime();
         if (error.message.includes('Unauthorized') && token) {
@@ -336,87 +363,96 @@ chrome.alarms.onAlarm.addListener(alarm => {
     }
 });
 
+// Storage Change Listener (Restored Detail)
+chrome.storage.onChanged.addListener(async (changes, namespace) => {
+    if (namespace !== 'sync') return; // Only care about sync changes
+
+    console.log('Sync storage changed:', Object.keys(changes));
+    let needsFullCheck = false;
+
+    // --- 1. Handle Disable Event Immediately ---
+    if (changes.isEnabled !== undefined && changes.isEnabled.newValue === false) {
+        console.log("Extension is now disabled via settings. Cleaning up immediately.");
+        await clearManualEndAlarm();
+        await clearManualFocusEndTime();
+        if (currentActiveProfileName) { // Check if any profile was active
+            await updateBlockingRules(false, [], '', null); // Remove rules
+        }
+        currentActiveProfileName = null; // Reset profile state
+        currentFocusState = false; // Reset focus state flag
+        updatePopupState('Disabled', null);
+        clearAlarm(); // Clear calendar check alarm
+        return; // Stop processing this change event further
+    }
+
+    // If we reach here, the extension is enabled or wasn't the setting that changed isEnabled to false.
+
+    // --- 2. Handle Enable Event ---
+    if (changes.isEnabled !== undefined && changes.isEnabled.newValue === true) {
+        console.log("Extension re-enabled via settings.");
+        needsFullCheck = true; // Need a full check to see if calendar focus should start
+        scheduleNextCheck();   // Ensure calendar alarm is scheduled
+    }
+
+    // --- 3. Handle Profile or Site Config Changes (while enabled) ---
+    let configChanged = false;
+    if (changes.profilesConfig || changes.sitesConfig || changes.globalBlockMessage) {
+        console.log('Profile/Site config or global message changed.');
+        configChanged = true;
+        needsFullCheck = true; // Config changes might affect keywords, rules etc.
+    }
+
+    if (configChanged) {
+        // Load the *very latest* state reflecting the changes
+        const newState = await loadStateFromStorage();
+
+        // If a profile is *currently* active, update rules/tabs immediately
+        if (currentActiveProfileName && newState.isEnabled) { // Check isEnabled again just in case
+            console.log(`Config changed while profile "${currentActiveProfileName}" is active. Updating rules/tabs now.`);
+
+            // Filter the NEW rules for the CURRENTLY active profile
+            const rulesForCurrentProfile = newState.processedSitesConfig.filter(rule =>
+                rule.profiles.includes(currentActiveProfileName)
+            );
+
+            try {
+                await updateBlockingRules(true, rulesForCurrentProfile, newState.globalBlockMessage, newState.redirectUrl);
+                console.log("Checking existing tabs against new rules.");
+                await checkExistingTabs(rulesForCurrentProfile, newState.globalBlockMessage, newState.redirectUrl); // Pass filtered rules
+            } catch (error) {
+                 console.error("Error immediately applying config changes:", error);
+                 const currentManualEndTime = await getManualFocusEndTime(); // For popup state
+                 if (error.message.includes('Rule Limit Exceeded')) {
+                     updatePopupState('Error: Rule Limit', currentManualEndTime);
+                     // Transition out of focus if rules can't be applied
+                     await updateBlockingRules(false, [], '', null);
+                     currentActiveProfileName = null;
+                     currentFocusState = false;
+                     await restoreBlockedTabs(); // Restore if forced out
+                 } else {
+                     updatePopupState('Error', currentManualEndTime);
+                 }
+                 // If rules failed, maybe skip the full check below? Or let it run to try again? Let it run for now.
+            }
+        }
+    }
+
+    // --- 4. Trigger Full Check if Needed ---
+    if (needsFullCheck) {
+        console.log('Triggering full state re-evaluation (checkCalendarAndSetBlocking).');
+        // This ensures the correct profile is identified based on new keywords/time,
+        // and the state machine handles transitions properly.
+        checkCalendarAndSetBlocking();
+    }
+});
+
+
 // Storage Change Listener (Reacts to settings changes from Options page or local state)
 chrome.storage.onChanged.addListener(async (changes, namespace) => {
 
     // React to sync changes (settings)
     if (namespace === 'sync') {
-        console.log('Sync storage changed:', Object.keys(changes));
-        let needsFullCheck = false;
-        let configOrEnableChanged = false;
-
-        // Check latest enabled status directly from storage
-        const syncState = await chrome.storage.sync.get('isEnabled');
-        const isEnabled = syncState.isEnabled === undefined ? true : syncState.isEnabled;
-
-        // Handle disable event FIRST
-        if (changes.isEnabled !== undefined && !isEnabled) {
-            console.log("Extension is now disabled via settings. Cleaning up.");
-            await clearManualEndAlarm(); // Clear manual alarm
-            await clearManualFocusEndTime(); // Clear manual state in storage
-            if (currentFocusState) { // If any focus was active
-                await updateBlockingRules(false, [], '', null); // Remove rules
-                currentFocusState = false; // Update focus state
-            }
-            updatePopupState('Disabled', null); // Update popup
-            clearAlarm(); // Clear calendar check alarm
-            return; // Stop processing sync changes further
-        }
-
-        // If it wasn't a disable event, or it was an enable event
-        const newState = await loadStateFromStorage(); // Load latest state (includes validation)
-
-        if (changes.isEnabled !== undefined && isEnabled) {
-            // Just re-enabled
-            console.log("Extension re-enabled via settings.");
-            configOrEnableChanged = true;
-            needsFullCheck = true; // Trigger full check
-            scheduleNextCheck(); // Ensure calendar alarm is running
-        }
-
-        // Check other config changes (only if enabled)
-        if (isEnabled) {
-            if (changes.sitesConfig || changes.globalBlockMessage) {
-                console.log('Site config or global message changed.');
-                configOrEnableChanged = true;
-            }
-            if (changes.focusKeyword) {
-                console.log('Focus keyword changed.');
-                needsFullCheck = true; // Need to check calendar again
-            }
-
-            // If config changed (and enabled), update rules based on current focus state
-            if (configOrEnableChanged) {
-                console.log("Config/Enable changed, updating rules for current focus state:", currentFocusState);
-                const currentManualEndTime = await getManualFocusEndTime(); // Needed for popup state
-                try {
-                    // Update rules based on *current* focus state (manual or calendar)
-                    await updateBlockingRules(currentFocusState, newState.sitesConfig, newState.globalBlockMessage, newState.redirectUrl);
-                    if (currentFocusState) {
-                        console.log("Checking existing tabs due to config change while focus active.");
-                        await checkExistingTabs(newState.sitesConfig, newState.globalBlockMessage, newState.redirectUrl);
-                    }
-                } catch (error) {
-                    console.error("Error applying config changes:", error);
-                    if (error.message.includes('Rule Limit Exceeded')) {
-                        updatePopupState('Error: Rule Limit', currentManualEndTime);
-                        // Transition out of focus if rules can't be applied
-                        if (currentFocusState) {
-                            await updateBlockingRules(false, [], '', null);
-                            currentFocusState = false;
-                        }
-                    } else {
-                        updatePopupState('Error', currentManualEndTime);
-                    }
-                }
-            }
-
-            // If keyword changed or just re-enabled, trigger a full calendar check immediately
-            if (needsFullCheck) {
-                console.log('Triggering full re-check due to keyword change or re-enabling.');
-                checkCalendarAndSetBlocking();
-            }
-        }
+        return; // Ignore sync changes for now
     }
 
     // React to local changes (popup state, manual focus time)
