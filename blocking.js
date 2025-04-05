@@ -34,7 +34,7 @@ export async function updateBlockingRules(shouldBlock, rulesForActiveProfile, gl
     
                  rulesToAdd.push({
                      id: ruleId,
-                     priority: RULE_PRIORITY - 1, // Lower priority than specific allows maybe? Or same? Let's try same first.
+                     priority: RULE_PRIORITY + 1, // Lower priority than specific allows maybe? Or same? Let's try same first.
                      action: { type: 'redirect', redirect: { url: targetUrl } },
                      condition: {
                          // Target HTTP and HTTPS schemes, exclude extension origin

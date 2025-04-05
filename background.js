@@ -476,28 +476,71 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
     }
 });
 
-
-// Tab Update Listener (for navigating away from block page)
+// Tab Update Listener (URL change)
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    // Only care about URL changes for existing tabs
-    if (changeInfo.url) {
+    // Use changeInfo.url as it's often the most reliable indicator of the *new* URL
+    // Check if focus is active (either type) - Need current profile name
+    const manualEndTime = await getManualFocusEndTime();
+    const isActive = currentFocusState || manualEndTime; // Check if any focus is active
+
+    // Proceed only if focus is active and URL changed
+    if (isActive && changeInfo.url && tab) {
+        const state = await loadStateFromStorage();
+        if (state.isEnabled) {
+            // *** FILTER RULES based on current active profile ***
+            const profileName = manualEndTime ? "Manual" : currentActiveProfileName; // Determine active profile
+            let rulesForThisCheck = [];
+            if (profileName) {
+                 rulesForThisCheck = state.processedSitesConfig.filter(rule =>
+                    rule.profiles.includes(profileName)
+                 );
+            }
+            console.log(`[onUpdated] Active profile: ${profileName}, Rules count: ${rulesForThisCheck.length}`);
+            // **************************************************
+
+            checkAndBlockTabIfNeeded(tabId, changeInfo.url, rulesForThisCheck, state.globalBlockMessage, state.redirectUrl); // Pass FILTERED rules
+        }
+    } else if (changeInfo.url) { // Check for navigation away from block page even if focus inactive
         const map = await getBlockedTabs();
-        // If this tab *was* blocked...
         if (map[tabId]) {
             const baseRedirectUrl = chrome.runtime.getURL('blocked.html').split('?')[0];
-            // ...but it navigated somewhere *else* (not just a parameter change on block page)
             if (!changeInfo.url.startsWith(baseRedirectUrl)) {
                 console.log(`Tab ${tabId} navigated away from block page to ${changeInfo.url}. Removing from restore map.`);
                 removeBlockedTab(tabId);
             }
         }
     }
-    // Existing blocking logic for active focus sessions
+});
+
+// Tab Activation Listener (Switching Tabs)
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+    // Check if focus is active - Need current profile name
     const manualEndTime = await getManualFocusEndTime();
-    if ((currentFocusState || manualEndTime) && changeInfo.url && tab) { // Ensure tab exists
-        const state = await loadStateFromStorage();
-        if (state.isEnabled) {
-            checkAndBlockTabIfNeeded(tabId, changeInfo.url, state.sitesConfig, state.globalBlockMessage, state.redirectUrl);
+    const isActive = currentFocusState || manualEndTime; // Check if any focus is active
+
+    if (isActive) {
+        console.log(`[Tab Listener] Tab activated: ${activeInfo.tabId}`);
+        try {
+            const tab = await chrome.tabs.get(activeInfo.tabId);
+            const state = await loadStateFromStorage();
+            if (state.isEnabled && tab && tab.url) {
+                // *** FILTER RULES based on current active profile ***
+                const profileName = manualEndTime ? "Manual" : currentActiveProfileName; // Determine active profile
+                let rulesForThisCheck = [];
+                if (profileName) {
+                     rulesForThisCheck = state.processedSitesConfig.filter(rule =>
+                        rule.profiles.includes(profileName)
+                     );
+                }
+                 console.log(`[onActivated] Active profile: ${profileName}, Rules count: ${rulesForThisCheck.length}`);
+                // **************************************************
+
+                checkAndBlockTabIfNeeded(tab.id, tab.url, rulesForThisCheck, state.globalBlockMessage, state.redirectUrl); // Pass FILTERED rules
+            }
+        } catch (error) {
+            if (!error.message.includes("No tab with id") && !error.message.includes("Cannot access")) {
+                 console.warn(`[Tab Listener] Error getting/checking activated tab ${activeInfo.tabId}:`, error);
+            }
         }
     }
 });
@@ -509,27 +552,6 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
     removeBlockedTab(tabId);
 });
 
-// Tab Activation Listener (Switching Tabs)
-chrome.tabs.onActivated.addListener(async (activeInfo) => {
-    const manualEndTime = await getManualFocusEndTime(); // Check manual first
-    if (currentFocusState || manualEndTime) { // Check if *any* focus is active
-        console.log(`[Tab Listener] Tab activated: ${activeInfo.tabId}`);
-        try {
-            // Get details of the activated tab
-            const tab = await chrome.tabs.get(activeInfo.tabId);
-             // Need current state for blocking check
-            const state = await loadStateFromStorage();
-            if (state.isEnabled && tab && tab.url) { // Ensure enabled and tab has URL
-                checkAndBlockTabIfNeeded(tab.id, tab.url, state.sitesConfig, state.globalBlockMessage, state.redirectUrl);
-            }
-        } catch (error) {
-             // Ignore common errors if tab closed before get, or permissions issues
-            if (!error.message.includes("No tab with id") && !error.message.includes("Cannot access") && !error.message.includes("Invalid tab ID")) {
-                 console.warn(`[Tab Listener] Error getting/checking activated tab ${activeInfo.tabId}:`, error);
-            }
-        }
-    }
-});
 
 // Message Listener (Updated)
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
