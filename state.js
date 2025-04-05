@@ -17,80 +17,73 @@ export async function loadStateFromStorage() {
     console.log("loadStateFromStorage: Loading settings...");
     let state = {
         isEnabled: true,
-        // Processed list will now include allowedVideoIds
-        sitesConfig: [], // Array<{domain: string, message: string|null, allowedVideoIds: string[]}>
-        blockedDomains: [],
+        profilesConfig: [], // Array<{ name: string, keyword: string | null }>
+        // Processed list, domains expanded
+        processedSitesConfig: [], // Array<{id: string, domain?: string, blockAll?: boolean, message: string|null, allowedVideos?: Array<{id:string, name:string}>, profiles: string[]}>
         globalBlockMessage: defaultGlobalMessageForBG,
-        focusKeyword: defaultFocusKeyword,
+        focusKeyword: '', // Might become less relevant or represent a default
         redirectUrl: chrome.runtime.getURL('blocked.html')
     };
 
     try {
         const data = await chrome.storage.sync.get([
-            'sitesConfig', 'globalBlockMessage', 'focusKeyword', 'isEnabled'
+            'sitesConfig', 'profilesConfig', 'globalBlockMessage', 'isEnabled' // Removed focusKeyword for now
         ]);
 
         state.isEnabled = data.isEnabled === undefined ? true : data.isEnabled;
-        state.focusKeyword = (data.focusKeyword || defaultFocusKeyword).trim(); // Ensure keyword is trimmed
         state.globalBlockMessage = data.globalBlockMessage || defaultGlobalMessageForBG;
 
-        const rawSitesConfig = data.sitesConfig || defaultSitesConfigForBG;
+        // --- Load and Validate Profiles ---
+        const rawProfilesConfig = data.profilesConfig || [{ name: "Manual", keyword: null }]; // Default with Manual
+        // Add validation here if needed (e.g., ensure 'Manual' exists, unique names)
+        state.profilesConfig = rawProfilesConfig;
+        console.log("Loaded Profiles Config:", state.profilesConfig);
 
-        // PROCESS RAW CONFIG: Split domains, validate, and associate shared message/video IDs
-        state.sitesConfig = rawSitesConfig.flatMap(item => {
-            const domainString = item.domain || '';
+        // --- Load and Process Site Rules ---
+        const rawSitesConfig = data.sitesConfig || []; // Default to empty array
+        state.processedSitesConfig = rawSitesConfig.flatMap(item => {
             const message = item.message || null;
-            // Get allowedVideoIds from raw item, default to empty array
-            const allowedVideos = Array.isArray(item.allowedVideos) ? item.allowedVideos : [];
-            const processedEntries = [];
+            const profiles = Array.isArray(item.profiles) ? item.profiles : [];
+            const id = item.id || crypto.randomUUID(); // Assign ID if missing
 
-            domainString.split(',')
-                .map(part => part.trim()).filter(p => p)
-                .forEach(potentialDomain => {
-                    const validDomain = extractDomain(potentialDomain);
-                    if (validDomain) {
-                        processedEntries.push({
-                             domain: validDomain,
-                             message: message,
-                             allowedVideos: allowedVideos // Pass along the object array
-                        });
-                    } else {
-                        console.warn(`Invalid domain found and skipped: "${potentialDomain}" from input "${domainString}"`);
-                    }
-                });
-            return processedEntries; // Return array of processed entries for this raw item
+            if (item.blockAll === true) {
+                // Block All Entry
+                return [{ id: id, blockAll: true, message: message, profiles: profiles }];
+            } else {
+                // Standard Entry - Expand domains
+                const domainString = item.domain || '';
+                const allowedVideos = Array.isArray(item.allowedVideos) ? item.allowedVideos : [];
+                const expandedEntries = [];
+                domainString.split(',')
+                    .map(part => part.trim()).filter(p => p)
+                    .forEach(potentialDomain => {
+                        const validDomain = extractDomain(potentialDomain);
+                        if (validDomain) {
+                            expandedEntries.push({
+                                id: id, // Share same original ID
+                                domain: validDomain,
+                                message: message,
+                                allowedVideos: allowedVideos,
+                                profiles: profiles // Share same profile assignment
+                            });
+                        } else { /* warning */ }
+                    });
+                return expandedEntries;
+            }
         });
-        // ********************************************************************
+        // *********************************
 
-        // Derive blockedDomains from the *processed* sitesConfig
-        state.blockedDomains = state.sitesConfig.map(item => item.domain);
-
-        console.log("State loaded/updated. Enabled:", state.isEnabled, "Keyword:", state.focusKeyword);
-        console.log("Processed Blocked Domains Count:", state.sitesConfig.length, "Domains:", state.blockedDomains);
-        console.log("Processed Sites Config:", state.sitesConfig); // Log the full processed config
-
+        console.log("Processed Sites Config Count:", state.processedSitesConfig.length);
 
     } catch (error) {
-        console.error("Error loading state from storage:", error);
-        // Apply defaults on error - ensure defaults are also processed
-        state.isEnabled = true;
-        state.focusKeyword = defaultFocusKeyword;
+        console.error("Error loading state:", error);
+        // Apply safe defaults
+        state.profilesConfig = [{ name: "Manual", keyword: null }];
+        state.processedSitesConfig = [];
         state.globalBlockMessage = defaultGlobalMessageForBG;
-        // Process defaults similar to loaded data
-        state.sitesConfig = defaultSitesConfigForBG.flatMap(item => {
-            const domainString = item.domain || '';
-            const message = item.message || null;
-            const allowedVideos = Array.isArray(item.allowedVideos) ? item.allowedVideos : []; // Handle defaults structure
-            return domainString.split(',')
-                .map(part => part.trim()).filter(p => p)
-                .map(potentialDomain => extractDomain(potentialDomain))
-                .filter(validDomain => validDomain)
-                .map(validDomain => ({ domain: validDomain, message: message, allowedVideos: allowedVideos })); // Include allowedVideos
-        });
-        state.blockedDomains = state.sitesConfig.map(item => item.domain);
-       console.warn("Applied default state due to loading error. Processed default domains:", state.blockedDomains);
+        state.isEnabled = true;
     }
-    return state;
+    return state; // Return object containing both configs
 }
 
 

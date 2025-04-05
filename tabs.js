@@ -12,45 +12,60 @@ import { addBlockedTab } from './state.js';
  * @param {string} globalBlockMessage - Fallback blocking message.
  * @param {string} redirectUrl - Base URL of the blocked page.
  */
-export async function checkAndBlockTabIfNeeded(tabId, url, sitesConfig, globalBlockMessage, redirectUrl) {
+export async function checkAndBlockTabIfNeeded(tabId, url, rulesForActiveProfile, globalBlockMessage, redirectUrl) {
     const baseRedirectUrl = redirectUrl ? redirectUrl.split('?')[0] : '';
-    if (!url || !baseRedirectUrl || url.startsWith(baseRedirectUrl)) {
-        return; // No need to block or track
+    if (!url || !baseRedirectUrl || url.startsWith(baseRedirectUrl)) return;
+
+    let blockResult = false; // Becomes true, message string, or 'blockAll' object
+    let blockAllRule = rulesForActiveProfile.find(rule => rule.blockAll === true);
+
+    // 1. Check Block All Rule
+    if (blockAllRule) {
+        // Check if the URL is an exception (e.g., extension pages - should be handled by excludedInitiatorDomains in DNR, but double check?)
+        // For simplicity, assume if blockAllRule exists, we block (DNR handles exclusions)
+        blockResult = blockAllRule; // Store the rule object itself
+    } else {
+    // 2. Check Specific Domain Rules (if no block all)
+        try {
+            const currentUrl = new URL(url);
+            const currentHostname = currentUrl.hostname.toLowerCase();
+
+            for (const rule of rulesForActiveProfile) {
+                 if (!rule.domain) continue; // Skip non-domain rules
+                 const blockedDomain = rule.domain.toLowerCase();
+                 if (currentHostname === blockedDomain || currentHostname.endsWith('.' + blockedDomain)) {
+                     blockResult = rule; // Store the matching rule object
+                     break; // Found the specific rule
+                 }
+            }
+        } catch (e) { /* ignore url parse errors */ }
     }
 
-    const blockResult = isUrlBlocked(url, sitesConfig);
-
+    // 3. Perform Redirect if Blocked
     if (blockResult !== false) {
-        // *** Track the tab BEFORE redirecting ***
-        await addBlockedTab(tabId, url); // Pass the original URL
-        // ***************************************
+        await addBlockedTab(tabId, url); // Track original URL
 
         let finalMessage;
-        // ... (determine message based on blockResult) ...
-        if (typeof blockResult === 'string') { finalMessage = blockResult; }
-        else { finalMessage = globalBlockMessage || defaultGlobalMessageForBG; }
+        let allowedVideos = [];
+        let targetUrl;
 
-        // Find the specific site config entry for allowed videos (needed if using grouped domains)
-        const siteEntry = sitesConfig.find(item => {
-             const blockedDomain = item.domain.toLowerCase();
-             const currentHostname = new URL(url).hostname.toLowerCase();
-             return currentHostname === blockedDomain || currentHostname.endsWith('.' + blockedDomain);
-        });
-        const allowedVideos = siteEntry?.allowedVideos || [];
-
-        const encodedMessage = encodeURIComponent(finalMessage);
-        let targetUrl = `${baseRedirectUrl}?message=${encodedMessage}`;
-
-        // Add allowed videos if applicable (using the found site entry)
-        if (allowedVideos.length > 0 && (siteEntry.domain === 'youtube.com' || siteEntry.domain === 'youtu.be')) {
-             try {
-                 const allowedVideosJson = JSON.stringify(allowedVideos);
-                 const encodedAllowedVideos = encodeURIComponent(allowedVideosJson);
-                 targetUrl += `&allowedVideos=${encodedAllowedVideos}`;
-             } catch (e) { /* handle error */ }
+        if (blockResult.blockAll) {
+            finalMessage = blockResult.message || globalBlockMessage || "All sites blocked";
+            targetUrl = `${baseRedirectUrl}?message=${encodeURIComponent(finalMessage)}`;
+        } else { // Specific domain rule matched (blockResult is the rule object)
+            finalMessage = blockResult.message || globalBlockMessage || "Site blocked";
+            allowedVideos = blockResult.allowedVideos || [];
+            targetUrl = `${baseRedirectUrl}?message=${encodeURIComponent(finalMessage)}`;
+            if (allowedVideos.length > 0 && (blockResult.domain === 'youtube.com' || blockResult.domain === 'youtu.be')) {
+                try {
+                    targetUrl += `&allowedVideos=${encodeURIComponent(JSON.stringify(allowedVideos))}`;
+                } catch (e) {
+                    console.error(`[Tab Blocker] Error encoding allowed videos for ${blockResult.domain}:`, e);
+                }
+            }
         }
 
-        console.log(`[Tab Blocker] BLOCKING Tab: ${tabId}, URL: ${url}. Redirecting...`);
+        console.log(`[Tab Blocker] BLOCKING Tab: ${tabId} (Rule: ${blockResult.blockAll ? 'BLOCK ALL' : blockResult.domain}). Redirecting...`);
         try {
             await chrome.tabs.update(tabId, { url: targetUrl });
         } catch (error) {
