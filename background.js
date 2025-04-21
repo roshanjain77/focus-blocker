@@ -13,6 +13,7 @@ import { getAuthToken, removeCachedAuthToken } from './auth.js';
 import { getActiveFocusProfileName } from './calendar.js';
 import { updateBlockingRules } from './blocking.js';
 import { checkAndBlockTabIfNeeded, checkExistingTabs } from './tabs.js';
+import { fetchValidVideosFromCreators } from './youtubeApi.js';
 
 // --- Global State ---
 // currentFocusState useful for quick checks in listeners & transition logic
@@ -714,51 +715,65 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     // New handler to provide full status to popup
     if (request.action === "getPopupStatus") {
-         Promise.all([
-             chrome.storage.local.get(['extensionStatus', constants.MANUAL_FOCUS_END_TIME_KEY, constants.EXCEPTION_END_TIME_KEY]),
-             calculateAvailableExceptionMs() // Calculate available time
-         ]).then(([localData, availableMs]) => {
-             sendResponse({
-                 extensionStatus: localData.extensionStatus,
-                 manualFocusEndTime: localData[constants.MANUAL_FOCUS_END_TIME_KEY] || null,
-                 exceptionEndTime: localData[constants.EXCEPTION_END_TIME_KEY] || null,
-                 availableExceptionMs: availableMs // Send available time to popup
-             });
-         }).catch(error => {
-              console.error("Error getting popup status:", error);
-              sendResponse(null); // Indicate error to popup
-         });
+        Promise.all([
+            chrome.storage.local.get(['extensionStatus', constants.MANUAL_FOCUS_END_TIME_KEY, constants.EXCEPTION_END_TIME_KEY]),
+            calculateAvailableExceptionMs() // Calculate available time
+        ]).then(([localData, availableMs]) => {
+            sendResponse({
+                extensionStatus: localData.extensionStatus,
+                manualFocusEndTime: localData[constants.MANUAL_FOCUS_END_TIME_KEY] || null,
+                exceptionEndTime: localData[constants.EXCEPTION_END_TIME_KEY] || null,
+                availableExceptionMs: availableMs // Send available time to popup
+            });
+        }).catch(error => {
+            console.error("Error getting popup status:", error);
+            sendResponse(null); // Indicate error to popup
+        });
         return true; // Indicate async response
     }
 
     // Existing handlers
-     if (request.action === "settingsUpdated") {
-         console.log("Received 'settingsUpdated' message. Triggering state reload and check.");
-         // Run checkCalendarAndSetBlocking to react to potential changes
-         checkCalendarAndSetBlocking();
-         // No response needed here, options page doesn't wait
-         return false; // Indicate sync response or no response
-     }
-     if (request.action === "getAuthStatus") {
-         getAuthToken(false).then(token => {
-             sendResponse({ isAuthorized: !!token });
-         });
-         return true; // Indicate async response
-     }
-     if (request.action === "triggerManualCheck") {
-          console.log("Manual check triggered via message.");
-          checkCalendarAndSetBlocking().then(() => {
-                sendResponse({ status: "Check initiated." });
-          }).catch(e => {
-                 sendResponse({ status: "Check failed.", error: e.message });
-          });
-          return true; // Indicate async response
-     }
-     if (request.action === "updateOptionsAuthStatus") {
-         // Message sent *from* background *to* options. No response needed.
-         console.log("Ignoring 'updateOptionsAuthStatus' received by background.");
-         return false;
-     }
+    if (request.action === "settingsUpdated") {
+        console.log("Received 'settingsUpdated' message. Triggering state reload and check.");
+        // Run checkCalendarAndSetBlocking to react to potential changes
+        checkCalendarAndSetBlocking();
+        // No response needed here, options page doesn't wait
+        return false; // Indicate sync response or no response
+    }
+
+    if (request.action === "getAuthStatus") {
+        getAuthToken(false).then(token => {
+            sendResponse({ isAuthorized: !!token });
+        });
+        return true; // Indicate async response
+    }
+    if (request.action === "triggerManualCheck") {
+        console.log("Manual check triggered via message.");
+        checkCalendarAndSetBlocking().then(() => {
+            sendResponse({ status: "Check initiated." });
+        }).catch(e => {
+                sendResponse({ status: "Check failed.", error: e.message });
+        });
+        return true; // Indicate async response
+    }
+    if (request.action === "updateOptionsAuthStatus") {
+        // Message sent *from* background *to* options. No response needed.
+        console.log("Ignoring 'updateOptionsAuthStatus' received by background.");
+        return false;
+    }
+
+    if (request.action === "fetchSubscriptionVideos") {
+        console.log("Received request to fetch valid videos from curated creators.");
+        fetchValidVideosFromCreators()
+            .then(videos => {
+                sendResponse({ success: true, videos: videos });
+            })
+            .catch(error => {
+                console.error("Background error fetching valid videos:", error);
+                sendResponse({ success: false, error: error.message });
+            });
+        return true; // Indicate async response
+    }
 
 
     // Default: Ignore unknown messages

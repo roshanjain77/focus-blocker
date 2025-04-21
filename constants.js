@@ -37,3 +37,17 @@ export const DEFAULT_EXCEPTION_DURATION_MS = 15 * 60 * 1000; // Grant 15 mins pe
 // Night Time Definition
 export const NIGHT_START_HOUR = 0; // 12:00 AM (inclusive)
 export const NIGHT_END_HOUR = 6;   // 6:00 AM (exclusive)
+
+export const CREATOR_VIDEOS_TO_CHECK = 5; // How many recent videos to check per creator for duration filter
+export const MIN_VIDEO_DURATION_SECONDS = 5 * 60; // 5 minutes
+export const MAX_VIDEO_DURATION_SECONDS = 25 * 60; // 25 minutes
+export const CURATED_CREATORS = [
+    { name: "Mathew Berman", channelId: "UCawZsQWqfGSbCI5yjkdVkTA" },
+    { name: "Markets By Zerodha", channelId: "UCXbKJML9pVclFHLFzpvBgWw" },
+    { name: "Slogo", channelId: "UCHdMK5Ef2El8KbD3L_WgANg" },
+    { name: "Finnogin", channelId: "UCaSFA101FujqVXnSbfOaH5w" },
+    { name: "Crainer", channelId: "UCEaReYkPVfExkfXptk0bSPw" },
+    { name: "WhostheBoss", channelId: "UCMiJRAwDNSNzuYeN2uWa0pA" },
+    { name: "The OG Crew" , channelId: "UCEEYC7-n3iCQSyZBAZOmpEg" },
+    // Add more creators as needed
+];
