@@ -1,40 +1,36 @@
 {
-    "manifest_version": 3,
-    "name": "Calendar Focus Blocker",
-    "version": "1.1",
-    "description": "Blocks specific websites during 'focus' events in your Google Calendar.",
-    "permissions": [
-      "storage",
-      "identity",
-      "alarms",
-      "declarativeNetRequest",
-      "declarativeNetRequestFeedback",
-      "tabs"
-    ],
-    "host_permissions": [
-      "<all_urls>",
-      "https://www.googleapis.com/"
-    ],
-    "background": {
-        "service_worker": "background.js",
-        "type": "module"
-    },
-  
-    "options_page": "options.html",
-    "action": {
-      "default_popup": "popup.html"
-    },
-    "icons": {
-    },
-    "oauth2": {
-      "client_id": "146478383812-mm1mp15trdskedddut1rcf82nbm4shth.apps.googleusercontent.com",
-      "scopes": [
-        "https://www.googleapis.com/auth/calendar.readonly"
-      ]
-    },
-    "web_accessible_resources": [{
-     
+  "manifest_version": 3,
+  "name": "Calendar Focus Blocker",
+  "version": "1.1",
+  "description": "Blocks specific websites during 'focus' events in your Google Calendar.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAk1tNKfU71kHEzQhRX2SDFHne/kwhTNcII52db5bNl/dwTZdDvGZl4C3hmM22FdX1F9g9WXYaBZW96bPQaheB3kQAbygcDQQ36niO0aHQ4+iFdquyrhngMpdUqdWDPA29TUHevcCWeBUBGhlILvnnyZwk9sJS+rYpSM5LBeAN/op9VWKIC+1FLg7e7Ujlk569amY2ZiwLrnm/VM4KQQkWZE3+57NrFSUJVZL4Ao/e5wowQP7xAxDlsgsKWt461LysYT7OAKEbRcVKe5vnU+9azBgoqWegjuVzhqgKIsPUu8itG8wk+WLTcxy6GdLDlxBUYNGKdJ+Fw6BRGJSCChp3rQIDAQAB",
+  "permissions": [
+    "storage",
+    "identity",
+    "alarms",
+    "declarativeNetRequest",
+    "declarativeNetRequestFeedback",
+    "tabs"
+  ],
+  "host_permissions": ["<all_urls>", "https://www.googleapis.com/"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+
+  "options_page": "options.html",
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "icons": {},
+  "oauth2": {
+    "client_id": "380009178393-d79pje6d7vjce0mqu0hb0d2ldv2fa0er.apps.googleusercontent.com",
+    "scopes": ["https://www.googleapis.com/auth/calendar.readonly"]
+  },
+  "web_accessible_resources": [
+    {
       "resources": ["blocked.html", "blocked.js", "purify.min.js"],
       "matches": ["<all_urls>"]
-    }]
-  }
+    }
+  ]
+}
