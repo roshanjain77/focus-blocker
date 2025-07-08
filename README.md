@@ -1,135 +1,218 @@
 # Calendar Focus Blocker Chrome Extension
 
-Automatically block distracting websites during focus time scheduled in your Google Calendar, **or start a timed manual focus session anytime!** Stay focused and reclaim your productivity!
+Automatically block distracting websites during focus time scheduled in your Google Calendar, **or start a timed manual focus session anytime!** Features a sophisticated **multi-profile system** with **YouTube video allowlists** and comprehensive blocking capabilities. Stay focused and reclaim your productivity!
 
 ## Key Features
 
-*   **Google Calendar Integration:** Reads events directly from your primary Google Calendar.
-*   **Keyword Detection:** Identifies "focus time" events based on a customizable keyword in the event title (e.g., "[Focus]").
-*   **Manual Focus Timer:** Start timed focus sessions (e.g., 30 or 60 minutes) directly from the extension popup, overriding calendar checks.
-*   **Website Blocking:** Blocks a list of websites defined by you during active focus periods (calendar or manual).
-*   **Grouped Website Entry:** Enter multiple domains separated by commas (e.g., `youtube.com, youtu.be`) in a single entry to block them all with the same custom message.
-*   **Custom Block Message:** Displays a personalized message (can include basic HTML) when you attempt to access a blocked site. Assign specific messages per group of sites, with a global fallback.
-*   **Efficient Blocking:** Uses Chrome's `declarativeNetRequest` API for efficient, low-resource website blocking.
-*   **Secure Authentication:** Uses Google OAuth 2.0 for secure, read-only access to your calendar data.
-*   **Configurable:** Easily configure keywords, blocked sites, messages, and enable/disable via the extension's options page.
-*   **Status Popup:** Quickly see if focus is active (calendar or manual), start/stop manual sessions, and view remaining time for manual sessions.
+### 🎯 **Multi-Profile Focus System**
+*   **Profile-Based Blocking:** Create multiple focus profiles (e.g., "Work", "Study", "Deep Focus") with unique calendar keywords and blocking rules
+*   **Smart Profile Detection:** Calendar events trigger specific profiles based on keywords in event titles (e.g., "[Work]", "[Study]")
+*   **Manual Profile Override:** Manual focus sessions use a dedicated "Manual" profile that overrides calendar-based blocking
+
+### ⏰ **Dual Focus Activation**
+*   **Manual Focus Timer:** Start 30 or 60-minute focus sessions directly from the popup, with real-time countdown
+*   **Google Calendar Integration:** Automatically detects focus events in your calendar using customizable keywords per profile
+*   **Priority System:** Manual sessions take priority over calendar events, with seamless transitions
+
+### 🚫 **Advanced Website Blocking**
+*   **Flexible Blocking Rules:** Block specific domains or enable "Block All" mode for complete internet blocking
+*   **Domain Grouping:** Enter multiple domains (comma-separated) in single rules with shared custom messages
+*   **Subdomain Support:** Automatically blocks all subdomains (e.g., blocking `reddit.com` also blocks `old.reddit.com`)
+*   **Efficient Implementation:** Uses Chrome's `declarativeNetRequest` API for low-resource, high-performance blocking
+
+### 🎬 **YouTube Integration**
+*   **Allowed Video Lists:** Create curated lists of educational/work-related videos that remain accessible during focus
+*   **Embedded Video Player:** Watch allowed videos directly in the block page with privacy-enhanced playback
+*   **Per-Rule Video Assignment:** Different blocking rules can have different allowed video lists
+
+### 💬 **Custom Block Messages**
+*   **Rich HTML Support:** Create custom block messages with HTML formatting, sanitized for security
+*   **Per-Rule Messages:** Each blocking rule can have its own custom message
+*   **Global Fallback:** Set a default message for rules without specific messages
+*   **Dynamic Content:** Messages can include styling, links, and motivational content
+
+### 🔄 **Smart Tab Management**
+*   **Existing Tab Blocking:** When focus starts, automatically blocks and redirects already-open blocked sites
+*   **Tab Restoration:** When focus ends, intelligently restores previously blocked tabs to their original URLs
+*   **Session Persistence:** Tab tracking works across browser restarts and extension updates
+
+### ⚙️ **Configuration & Management**
+*   **Import/Export Settings:** Backup and share your complete configuration including profiles and blocking rules
+*   **Real-Time Updates:** Settings changes apply immediately without requiring extension reload
+*   **Profile Assignment:** Assign blocking rules to multiple profiles for flexible focus scenarios
 
 ## How It Works
 
-1.  **Manual Focus (Priority):** If you start a manual focus session via the popup, the extension immediately enables blocking rules for the specified duration, regardless of your calendar.
-2.  **Calendar Check:** If no manual session is active, the extension periodically checks your primary Google Calendar for events occurring *now*.
-3.  **Keyword Detection:** It looks for events whose titles contain your specified "Focus Keyword".
-4.  **Blocking Activation:** If a matching focus event is currently active (and no manual session is running), the extension enables blocking rules.
-5.  **Rule Application:** Blocking rules prevent you from accessing the websites you've listed in the options. Domains entered as comma-separated lists are treated as a group sharing the same custom message.
-6.  **Redirection:** If you try to visit a blocked site, you are redirected to a page displaying your custom message (per-site group message takes priority over the global message).
-7.  **Tab Check:** When any focus session (manual or calendar) starts, the extension checks currently open tabs and blocks them if they match the blocked list.
-8.  **Deactivation:**
-    *   Manual focus automatically stops (and blocking rules are disabled) when the timer runs out, or if stopped manually via the popup.
-    *   Calendar-based blocking automatically stops when the focus event ends, or if no active focus event is found during a check.
-    *   **Note:** After a manual session ends, the extension immediately checks the calendar to see if a calendar-based focus session should start.
+### Focus Activation Priority
+1. **Manual Focus (Highest Priority):** Manual sessions immediately activate blocking and override any calendar events
+2. **Calendar-Based Focus:** When no manual session is active, the extension checks for calendar events every 5 minutes
+3. **Profile Matching:** Calendar events are matched to profiles based on keywords in event titles
+4. **Rule Activation:** All blocking rules assigned to the active profile are immediately enforced
+
+### Blocking Mechanism
+1. **Rule Generation:** Chrome's declarativeNetRequest creates efficient blocking rules for active profiles
+2. **Traffic Interception:** All matching requests are redirected to the custom block page
+3. **Tab Management:** Existing tabs are checked and blocked if they match active rules
+4. **Restoration:** When focus ends, blocked tabs are restored to their original URLs
+
+### YouTube Integration
+1. **Video Allowlists:** Each blocking rule can specify allowed YouTube videos by ID
+2. **Smart Blocking:** YouTube is blocked except for specifically allowed videos
+3. **Embedded Playback:** Allowed videos play directly in the block page using privacy-enhanced YouTube
 
 ## Setup Instructions
 
-This extension requires initial setup in Google Cloud Console to securely access your calendar.
+### 1. Google Cloud Console Setup
 
-**1. Google Cloud Console Setup:**
+**Create OAuth Credentials:**
+*   Go to the [Google Cloud Console](https://console.cloud.google.com/)
+*   Create a new project or select an existing one
+*   Navigate to **APIs & Services > Library** and enable the **Google Calendar API**
+*   Go to **APIs & Services > Credentials**
 
-*   Go to the [Google Cloud Console](https://console.cloud.google.com/).
-*   Create a new project or select an existing one.
-*   Go to **APIs & Services > Library**. Search for and **Enable** the **Google Calendar API**.
-*   Go to **APIs & Services > Credentials**.
-*   Click **+ CREATE CREDENTIALS > OAuth client ID**.
-*   If prompted, configure the **OAuth consent screen**:
-    *   Select **User Type** (likely "External" unless you have a Workspace account).
-    *   Enter an **App name** (e.g., "Calendar Focus Blocker").
-    *   Enter your **User support email**.
-    *   Add Developer contact info (your email).
-    *   **Scopes:** Click "Add or Remove Scopes", find "Google Calendar API", and select the scope ending in `.../auth/calendar.readonly`. Click Update.
-    *   **Test users:** While the consent screen is in "Testing" mode, click "+ ADD USERS" and add the Google Account email address(es) you will use this extension with.
-    *   Save and continue through the consent screen setup.
-*   Go back to **APIs & Services > Credentials**.
-*   Click **+ CREATE CREDENTIALS > OAuth client ID** again.
-*   Select **Application type: Chrome Extension**.
-*   Enter a **Name** (e.g., "Focus Blocker Extension Client").
-*   **Application ID:** You need your extension's ID for this. To get it:
-    *   Open Chrome and go to `chrome://extensions`.
-    *   Enable "Developer mode" (top-right).
-    *   Click "Load unpacked" and select the folder containing this extension's code.
-    *   Copy the **ID** shown on the extension's card.
-    *   Paste this ID into the "Application ID" field in Google Cloud Console.
-*   Click **CREATE**.
-*   Copy the resulting **Client ID** (looks like `....apps.googleusercontent.com`). **You need this for the next step.**
+**Configure OAuth Consent Screen:**
+*   Click **OAuth consent screen** and select "External" user type
+*   Fill in required fields:
+    *   App name: "Calendar Focus Blocker"
+    *   User support email: Your email
+    *   Developer contact info: Your email
+*   Under **Scopes**, add `https://www.googleapis.com/auth/calendar.readonly`
+*   Add your Google account as a test user (while in testing mode)
 
-**2. Extension Code Setup:**
+**Create Chrome Extension Credentials:**
+*   Return to **Credentials** and click **+ CREATE CREDENTIALS > OAuth client ID**
+*   Select **Application type: Chrome Extension**
+*   For **Application ID**, you need your extension's Chrome ID:
+    1. Load the extension in Chrome (`chrome://extensions` > "Load unpacked")
+    2. Copy the extension ID from the extension card
+    3. Paste it into the Application ID field
+*   Click **CREATE** and copy the generated **Client ID**
 
-*   Download or clone the extension code files.
-*   Open the `manifest.json` file in a text editor.
-*   Find the `oauth2` section and paste your **Client ID** (copied from Google Cloud Console) as the value for `client_id`:
-    ```json
-     "oauth2": {
-       "client_id": "YOUR_COPIED_CLIENT_ID_HERE.apps.googleusercontent.com",
-       "scopes": [
-         "https://www.googleapis.com/auth/calendar.readonly"
-       ]
-     },
-    ```
-*   Save `manifest.json`.
+### 2. Extension Configuration
 
-**3. Load the Extension in Chrome:**
+**Update manifest.json:**
+```json
+{
+  "oauth2": {
+    "client_id": "YOUR_CLIENT_ID_HERE.apps.googleusercontent.com",
+    "scopes": ["https://www.googleapis.com/auth/calendar.readonly"]
+  }
+}
+```
 
-*   Go to `chrome://extensions`.
-*   Ensure "Developer mode" is enabled.
-*   If you loaded the extension temporarily before, remove it using the "Remove" button.
-*   Click **Load unpacked**.
-*   Select the folder containing all the extension's files (`manifest.json`, `background.js`, `options.html`, etc.).
-*   The extension should now appear in your list. Check for any errors on its card.
+**Load Extension:**
+*   Open `chrome://extensions`
+*   Enable "Developer mode"
+*   Click "Load unpacked" and select the extension folder
+*   Verify the extension loads without errors
 
-**4. Configure the Extension:**
+### 3. Initial Setup
 
-*   Find the "Calendar Focus Blocker" extension card on the `chrome://extensions` page and click **Details**, then **Extension options**. (Alternatively, click the extension's icon in your toolbar and click "Options").
-*   **Authorize:** Click the "Authorize / Re-authorize" button and follow the prompts to sign in with the Google Account you added as a test user. Grant the requested "View your calendars" permission.
-*   **Focus Keyword:** Enter the text the extension should look for in calendar event titles (e.g., `[Focus]`, `Deep Work`). Leave blank if you only plan to use manual focus.
-*   **Blocked Websites:**
-    *   Click "+ Add Site Entry".
-    *   In the "Website Domain(s)" field, enter the domains you want to block. **You can enter multiple domains separated by commas** (e.g., `youtube.com, facebook.com, reddit.com`) to apply the same custom message to all of them within that entry. The extension will block the main domain and its subdomains (e.g., entering `reddit.com` also blocks `old.reddit.com`).
-    *   Optionally, enter a custom HTML message for this specific site/group of sites in the "Custom HTML Message" box. If left blank, the Global Block Message will be used.
-    *   Add more entries as needed.
-*   **Global Block Message:** Enter the fallback message (HTML is allowed) to display when a site is blocked and doesn't have a specific custom message assigned.
-*   **Enable:** Ensure the "Enable Extension" checkbox is checked for the extension to function.
-*   Click **Save All Settings**.
+**Access Options:**
+*   Click the extension icon and select "Options" or go to `chrome://extensions` > Extension details > Extension options
 
-## Usage
+**Authorize Calendar Access:**
+*   Click "Authorize / Re-authorize" and sign in with your Google account
+*   Grant calendar read permissions when prompted
 
-**Calendar-Based Focus:**
+**Create Profiles:**
+*   Add focus profiles (e.g., "Work", "Study") with unique keywords
+*   Keywords should match text in your calendar events (e.g., "[Work]", "[Study]")
 
-1.  Create events in your Google Calendar during the times you want to focus automatically.
-2.  Include your chosen **Focus Keyword** (exactly as set in the options) somewhere in the event title.
-3.  During the scheduled time of these events (and if no manual focus is active), the extension will automatically block the websites you listed. Trying to access them will show your custom message.
-4.  Outside of these scheduled focus times, website access will be normal (unless manual focus is started).
+**Configure Blocking Rules:**
+*   Add website blocking rules and assign them to profiles
+*   Enter domains (comma-separated for groups) and optional custom messages
+*   For YouTube rules, add allowed video IDs if desired
 
-**Manual Focus:**
+**Test Configuration:**
+*   Create a test calendar event with your profile keyword
+*   Verify blocking activates during the event time
+*   Test manual focus sessions from the popup
 
-1.  Click the extension's icon in your Chrome toolbar to open the popup.
-2.  If focus is not already active, click "Focus 30 Min" or "Focus 60 Min" (or other configured times).
-3.  Blocking will start immediately for the selected duration. The popup will show the remaining time.
-4.  To end the manual session early, open the popup and click "Stop Manual Focus".
-5.  When the timer expires or you stop it manually, blocking stops, and the extension reverts to checking the calendar (if enabled and configured).
+## Usage Guide
 
-## Permissions Explained
+### Manual Focus Sessions
+*   Click the extension popup icon
+*   Choose "Focus 30 Min" or "Focus 60 Min"
+*   Monitor remaining time in the popup
+*   End early by clicking "Stop Manual Focus"
 
-*   **storage:** To save your settings (blocked sites list, messages, keyword, enabled status) and manual focus end time.
-*   **identity:** To securely authenticate with your Google Account via OAuth 2.0 to read calendar data.
-*   **alarms:** To periodically trigger checks of your calendar and to precisely end manual focus sessions.
-*   **declarativeNetRequest:** To efficiently block network requests to the specified websites without impacting browser performance.
-*   **tabs:** To check currently open tabs when a focus session starts and redirect them if they match a blocked site.
-*   **host_permissions (`<all_urls>`, `https://www.googleapis.com/`):** `<all_urls>` is required by `declarativeNetRequest` to potentially block any user-specified site. `googleapis.com` is needed to make requests to the Google Calendar API.
+### Calendar-Based Focus
+*   Create calendar events with profile keywords in titles
+*   Example: "Team Meeting [Work]" or "Study Session [Study]"
+*   Blocking automatically activates during event times
+*   Different profiles can have different blocking rules
+
+### YouTube Integration
+*   Add educational video IDs to blocking rules
+*   Videos remain accessible during focus via the block page
+*   Use privacy-enhanced playback (youtube-nocookie.com)
+
+### Configuration Management
+*   Export settings for backup: Options > "Export Settings"
+*   Import settings: Options > "Import Settings" > Select file
+*   Settings sync across devices when using Chrome sync
+
+## Advanced Features
+
+### Block All Mode
+*   Enable "Block All Websites" for complete internet blocking
+*   Only the extension's own pages remain accessible
+*   Useful for extreme focus scenarios or digital detox
+
+### Profile Strategies
+*   **Work Profile:** Block social media, allow work-related sites
+*   **Study Profile:** Block entertainment, allow educational content
+*   **Deep Focus:** Block everything except essential tools
+
+### Custom Messages
+*   Use HTML for rich formatting in block messages
+*   Include motivational quotes, focus tips, or deadline reminders
+*   Different messages for different types of distractions
+
+## Technical Details
+
+### Permissions Explained
+*   **storage:** Save settings and session data
+*   **identity:** Google OAuth authentication for calendar access
+*   **alarms:** Periodic calendar checks and timer management
+*   **declarativeNetRequest:** Efficient website blocking without performance impact
+*   **tabs:** Manage existing tabs during focus sessions
+*   **host_permissions:** Required for blocking user-specified domains and calendar API access
+
+### Performance & Efficiency
+*   Minimal resource usage through Chrome's native blocking APIs
+*   Efficient rule management with atomic updates
+*   Smart caching of calendar data and authentication tokens
+*   Optimized for minimal battery and performance impact
+
+### Privacy & Security
+*   Read-only calendar access (cannot modify your calendar)
+*   Local storage of all settings and preferences
+*   Optional cloud sync through Chrome's built-in sync
+*   No external analytics or tracking
 
 ## Limitations & Notes
 
-*   Calendar integration requires a Google Account and use of Google Calendar.
-*   Only checks the primary calendar associated with the authorized account.
-*   Calendar blocking relies entirely on the presence of the specified keyword in event titles.
-*   **Manual focus mode takes priority over calendar events.** If a manual session is running, calendar events will not trigger blocking.
-*   Initial setup requires configuration in Google Cloud Console.
-*   While your Google Cloud project's consent screen is in "Testing" mode, only Google accounts added as "Test users" can authorize the extension.
+*   Requires Google account and Google Calendar usage
+*   Only monitors the primary calendar of the authenticated account
+*   Calendar blocking depends on keyword presence in event titles
+*   Manual focus always overrides calendar-based blocking
+*   OAuth setup required during initial configuration
+*   Test users must be added during Google Cloud Console setup (testing mode)
+*   YouTube video allowlists require specific video IDs, not channel or playlist IDs
+
+## Support & Troubleshooting
+
+### Common Issues
+*   **No calendar events detected:** Verify keywords match exactly and events are in primary calendar
+*   **Blocking not working:** Check extension permissions and reload if necessary
+*   **OAuth errors:** Ensure correct Client ID in manifest.json and test user setup
+
+### Debug Steps
+1. Check extension errors in `chrome://extensions`
+2. Verify calendar authorization in Options page
+3. Test manual focus to isolate calendar vs. blocking issues
+4. Review blocking rules and profile assignments
+
+For additional support, check the extension's popup status messages and browser console for detailed error information.
