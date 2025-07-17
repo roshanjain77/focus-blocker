@@ -1,4 +1,4 @@
-import { extractDomain, isUrlBlocked } from '../utils.js';
+import { extractDomain, isUrlBlocked, DomainParser, UrlBlockingMatcher, BlockingResult } from '../utils.js';
 
 describe('extractDomain', () => {
   // Basic functionality tests
@@ -206,5 +206,110 @@ describe('isUrlBlocked', () => {
     ];
     // Test with both unicode and punycode versions
     expect(isUrlBlocked('https://xn--r8jz45g.xn--zckzah', intlConfig)).toBe('International domain');
+  });
+});
+
+// OOP Class Tests
+describe('DomainParser', () => {
+  test('should extract domains using static method', () => {
+    expect(DomainParser.extractDomain('example.com')).toBe('example.com');
+    expect(DomainParser.extractDomain('www.google.com')).toBe('google.com');
+    expect(DomainParser.extractDomain('subdomain.example.co.uk')).toBe('example.co.uk');
+  });
+
+  test('should validate hostnames correctly', () => {
+    expect(DomainParser.isValidHostname('example.com')).toBe(true);
+    expect(DomainParser.isValidHostname('192.168.1.1')).toBe(false);
+    expect(DomainParser.isValidHostname('invalid')).toBe(false);
+  });
+
+  test('should remove www prefix correctly', () => {
+    expect(DomainParser.removeWwwPrefix('www.example.com')).toBe('example.com');
+    expect(DomainParser.removeWwwPrefix('example.com')).toBe('example.com');
+    expect(DomainParser.removeWwwPrefix('www.co')).toBe('www.co'); // Too short, keeps www
+  });
+
+  test('should extract registrable domain correctly', () => {
+    expect(DomainParser.extractRegistrableDomain('example.com')).toBe('example.com');
+    expect(DomainParser.extractRegistrableDomain('subdomain.example.co.uk')).toBe('example.co.uk');
+    expect(DomainParser.extractRegistrableDomain('a.b.example.com')).toBe('example.com');
+  });
+});
+
+describe('UrlBlockingMatcher', () => {
+  const mockConfig = [
+    { domain: 'facebook.com', message: 'Facebook blocked' },
+    { domain: 'youtube.com', message: null },
+    { domain: 'twitter.com', message: '' }
+  ];
+
+  test('should initialize with config', () => {
+    const matcher = new UrlBlockingMatcher(mockConfig);
+    expect(matcher.sitesConfig).toEqual(mockConfig);
+  });
+
+  test('should update config', () => {
+    const matcher = new UrlBlockingMatcher([]);
+    matcher.updateConfig(mockConfig);
+    expect(matcher.sitesConfig).toEqual(mockConfig);
+  });
+
+  test('should check URLs and return BlockingResult', () => {
+    const matcher = new UrlBlockingMatcher(mockConfig);
+    const result = matcher.checkUrl('https://facebook.com');
+    
+    expect(result).toBeInstanceOf(BlockingResult);
+    expect(result.isBlocked).toBe(true);
+    expect(result.customMessage).toBe('Facebook blocked');
+  });
+
+  test('should validate URLs correctly', () => {
+    const matcher = new UrlBlockingMatcher();
+    expect(matcher.isValidUrl('https://example.com')).toBe(true);
+    expect(matcher.isValidUrl('http://example.com')).toBe(true);
+    expect(matcher.isValidUrl('ftp://example.com')).toBe(false);
+    expect(matcher.isValidUrl('chrome://settings')).toBe(false);
+  });
+
+  test('should check domain matches correctly', () => {
+    const matcher = new UrlBlockingMatcher();
+    expect(matcher.checkDomainMatch('facebook.com', 'facebook.com')).toBe(true);
+    expect(matcher.checkDomainMatch('www.facebook.com', 'facebook.com')).toBe(true);
+    expect(matcher.checkDomainMatch('notfacebook.com', 'facebook.com')).toBe(false);
+  });
+});
+
+describe('BlockingResult', () => {
+  test('should create result for blocked URL', () => {
+    const rule = { domain: 'facebook.com', message: 'Blocked' };
+    const result = new BlockingResult(true, 'Custom message', rule);
+    
+    expect(result.isBlocked).toBe(true);
+    expect(result.customMessage).toBe('Custom message');
+    expect(result.rule).toEqual(rule);
+    expect(result.useGlobalMessage).toBe(false);
+  });
+
+  test('should create result for non-blocked URL', () => {
+    const result = new BlockingResult(false);
+    
+    expect(result.isBlocked).toBe(false);
+    expect(result.customMessage).toBe(null);
+    expect(result.rule).toBe(null);
+    expect(result.useGlobalMessage).toBe(false);
+  });
+
+  test('should handle global message case', () => {
+    const result = new BlockingResult(true, null);
+    
+    expect(result.isBlocked).toBe(true);
+    expect(result.customMessage).toBe(null);
+    expect(result.useGlobalMessage).toBe(true);
+  });
+
+  test('should return correct message values', () => {
+    expect(new BlockingResult(false).getMessage()).toBe(false);
+    expect(new BlockingResult(true, 'Custom').getMessage()).toBe('Custom');
+    expect(new BlockingResult(true, null).getMessage()).toBe(true);
   });
 });

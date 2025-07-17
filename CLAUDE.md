@@ -18,6 +18,13 @@ npm test tests/utils.test.js  # Run specific test file
 # 1. Open chrome://extensions
 # 2. Enable "Developer mode"
 # 3. Click "Load unpacked" and select this directory
+
+# For OAuth setup (required for calendar integration):
+# 1. Create Google Cloud Console project
+# 2. Enable Google Calendar API
+# 3. Create OAuth credentials with extension ID
+# 4. Update manifest.json with client_id
+# 5. Add test users during development
 ```
 
 ## Architecture Overview
@@ -95,6 +102,14 @@ Comprehensive Jest test suite with:
 - `tabs`: Tab enumeration and restoration
 - `storage`: Configuration and state persistence
 - `<all_urls>`: Required for blocking arbitrary user-specified domains
+
+### OAuth Configuration
+
+The extension requires Google Calendar API access:
+- OAuth client ID must be configured in manifest.json
+- During development, test users must be added in Google Cloud Console
+- Calendar access is read-only (`https://www.googleapis.com/auth/calendar.readonly`)
+- Authentication tokens are managed by Chrome's identity API
 
 ### Configuration Structure
 

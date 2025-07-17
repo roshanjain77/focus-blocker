@@ -1,4 +1,4 @@
-import { getActiveFocusProfileName } from '../calendar.js';
+import { getActiveFocusProfileName, CalendarEvent, TimeRange, GoogleCalendarClient, ProfileMatcher, CalendarService } from '../calendar.js';
 
 describe('getActiveFocusProfileName', () => {
   beforeEach(() => {
@@ -64,7 +64,7 @@ describe('getActiveFocusProfileName', () => {
     // NOTE: This currently returns false due to a bug in calendar.js line 72
     // The function returns false immediately when the first profile has no events
     // instead of continuing to check other profiles. This should return null.
-    expect(result).toBe(false);
+    expect(result).toBe(null);
   });
 
   test('should return false when event does not match time range', async () => {
@@ -85,7 +85,7 @@ describe('getActiveFocusProfileName', () => {
 
     const result = await getActiveFocusProfileName('mock-token', mockProfilesConfig);
     
-    expect(result).toBe(false);
+    expect(result).toBe(null);
   });
 
   test('should handle all-day events', async () => {
@@ -106,9 +106,8 @@ describe('getActiveFocusProfileName', () => {
 
     const result = await getActiveFocusProfileName('mock-token', mockProfilesConfig);
     
-    // NOTE: This currently returns false, likely due to incorrect all-day event time calculation
     // All-day events should include the current time if it falls within the date range
-    expect(result).toBe(false);
+    expect(result).toBe('Focus');
   });
 
   test('should handle case-insensitive keyword matching', async () => {
@@ -165,7 +164,7 @@ describe('getActiveFocusProfileName', () => {
 
     const result = await getActiveFocusProfileName('mock-token', mockProfilesConfig);
     
-    expect(result).toBe(false);
+    expect(result).toBe(null);
   });
 
   test('should handle other API errors', async () => {
@@ -177,7 +176,7 @@ describe('getActiveFocusProfileName', () => {
 
     const result = await getActiveFocusProfileName('mock-token', mockProfilesConfig);
     
-    expect(result).toBe(false);
+    expect(result).toBe(null);
   });
 
   test('should handle fetch network errors', async () => {
@@ -231,7 +230,7 @@ describe('getActiveFocusProfileName', () => {
 
     const result = await getActiveFocusProfileName('mock-token', mockProfilesConfig);
     
-    expect(result).toBe(false);
+    expect(result).toBe(null);
   });
 
   test('should handle malformed event data', async () => {
@@ -252,7 +251,7 @@ describe('getActiveFocusProfileName', () => {
 
     const result = await getActiveFocusProfileName('mock-token', mockProfilesConfig);
     
-    expect(result).toBe(false);
+    expect(result).toBe(null);
   });
 
   test('should handle JSON parsing errors', async () => {
@@ -279,7 +278,7 @@ describe('getActiveFocusProfileName', () => {
     await getActiveFocusProfileName('mock-token', profilesWithSpecialChars);
     
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('q=%5BFocus%20%26%20Work%5D'),
+      expect.stringContaining('q=%5BFocus+%26+Work%5D'),
       expect.any(Object)
     );
   });
@@ -303,7 +302,7 @@ describe('getActiveFocusProfileName', () => {
 
     const result = await getActiveFocusProfileName('mock-token', mockProfilesConfig);
     
-    expect(result).toBe(false);
+    expect(result).toBe(null);
   });
 
   test('should handle events starting exactly at current time', async () => {
@@ -338,7 +337,7 @@ describe('getActiveFocusProfileName', () => {
 
     const result = await getActiveFocusProfileName('mock-token', mockProfilesConfig);
     
-    expect(result).toBe(false);
+    expect(result).toBe(null);
   });
 
   test('should handle null calendar data', async () => {
@@ -353,6 +352,305 @@ describe('getActiveFocusProfileName', () => {
 
     const result = await getActiveFocusProfileName('mock-token', mockProfilesConfig);
     
-    expect(result).toBe(false);
+    expect(result).toBe(null);
+  });
+});
+
+// OOP Class Tests
+describe('CalendarEvent', () => {
+  test('should create calendar event from API response', () => {
+    const apiEvent = {
+      summary: 'Team Meeting [Work]',
+      start: { dateTime: '2022-01-01T10:00:00Z' },
+      end: { dateTime: '2022-01-01T11:00:00Z' },
+      id: 'event123'
+    };
+
+    const event = CalendarEvent.fromApiResponse(apiEvent);
+
+    expect(event.summary).toBe('Team Meeting [Work]');
+    expect(event.start).toEqual(new Date('2022-01-01T10:00:00Z'));
+    expect(event.end).toEqual(new Date('2022-01-01T11:00:00Z'));
+    expect(event.id).toBe('event123');
+  });
+
+  test('should handle all-day events', () => {
+    const apiEvent = {
+      summary: 'All Day Event [Work]',
+      start: { date: '2022-01-01' },
+      end: { date: '2022-01-02' }
+    };
+
+    const event = CalendarEvent.fromApiResponse(apiEvent);
+
+    expect(event.start).toEqual(new Date('2022-01-01'));
+    expect(event.end).toEqual(new Date('2022-01-02'));
+  });
+
+  test('should check if event is active', () => {
+    const event = new CalendarEvent(
+      'Test Event',
+      new Date('2022-01-01T10:00:00Z'),
+      new Date('2022-01-01T11:00:00Z')
+    );
+
+    expect(event.isActive(new Date('2022-01-01T10:30:00Z'))).toBe(true);
+    expect(event.isActive(new Date('2022-01-01T09:30:00Z'))).toBe(false);
+    expect(event.isActive(new Date('2022-01-01T11:30:00Z'))).toBe(false);
+    expect(event.isActive(new Date('2022-01-01T11:00:00Z'))).toBe(false); // Exclusive end
+  });
+
+  test('should check if event contains keyword', () => {
+    const event = new CalendarEvent('Team Meeting [Work]', new Date(), new Date());
+
+    expect(event.containsKeyword('[Work]')).toBe(true);
+    expect(event.containsKeyword('[work]')).toBe(true); // Case insensitive
+    expect(event.containsKeyword('[Study]')).toBe(false);
+    expect(event.containsKeyword('')).toBe(false);
+  });
+
+  test('should create display string', () => {
+    const event = new CalendarEvent(
+      'Test Event',
+      new Date('2022-01-01T10:00:00Z'),
+      new Date('2022-01-01T11:00:00Z')
+    );
+
+    const display = event.toString();
+    expect(display).toContain('Test Event');
+    expect(display).toContain('2022-01-01T10:00:00');
+    expect(display).toContain('2022-01-01T11:00:00');
+  });
+});
+
+describe('TimeRange', () => {
+  test('should create time range around now', () => {
+    const currentTime = new Date('2022-01-01T10:00:00Z');
+    const range = TimeRange.createAroundNow(5, 10, currentTime);
+
+    expect(range.start).toEqual(new Date('2022-01-01T09:55:00Z'));
+    expect(range.end).toEqual(new Date('2022-01-01T10:10:00Z'));
+  });
+
+  test('should convert to API format', () => {
+    const range = new TimeRange(
+      new Date('2022-01-01T10:00:00Z'),
+      new Date('2022-01-01T11:00:00Z')
+    );
+
+    const apiFormat = range.toApiFormat();
+
+    expect(apiFormat).toEqual({
+      timeMin: '2022-01-01T10:00:00.000Z',
+      timeMax: '2022-01-01T11:00:00.000Z'
+    });
+  });
+});
+
+describe('GoogleCalendarClient', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  test('should build events URL correctly', () => {
+    const client = new GoogleCalendarClient();
+    const options = {
+      calendarId: 'primary',
+      singleEvents: true,
+      orderBy: 'startTime',
+      maxResults: 10
+    };
+
+    const url = client.buildEventsUrl(options, '2022-01-01T10:00:00Z', '2022-01-01T11:00:00Z', 'test');
+
+    expect(url).toContain('calendars/primary/events');
+    expect(url).toContain('timeMin=2022-01-01T10%3A00%3A00Z');
+    expect(url).toContain('timeMax=2022-01-01T11%3A00%3A00Z');
+    expect(url).toContain('q=test');
+    expect(url).toContain('singleEvents=true');
+    expect(url).toContain('orderBy=startTime');
+    expect(url).toContain('maxResults=10');
+  });
+
+  test('should handle API errors correctly', () => {
+    const client = new GoogleCalendarClient();
+    const mockResponse = { status: 401, statusText: 'Unauthorized' };
+
+    expect(() => client.handleApiError(mockResponse)).toThrow('Unauthorized');
+  });
+
+  test('should handle forbidden errors', () => {
+    const client = new GoogleCalendarClient();
+    const mockResponse = { status: 403, statusText: 'Forbidden' };
+
+    expect(() => client.handleApiError(mockResponse)).toThrow('Calendar API Error: 403 Forbidden');
+  });
+
+  test('should fetch events successfully', async () => {
+    const client = new GoogleCalendarClient();
+    const mockResponse = {
+      items: [
+        {
+          summary: 'Test Event [Work]',
+          start: { dateTime: '2022-01-01T10:00:00Z' },
+          end: { dateTime: '2022-01-01T11:00:00Z' }
+        }
+      ]
+    };
+
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: jest.fn().mockResolvedValue(mockResponse)
+    });
+
+    const timeRange = new TimeRange(new Date(), new Date());
+    const events = await client.fetchEvents('token', timeRange, 'test');
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toBeInstanceOf(CalendarEvent);
+    expect(events[0].summary).toBe('Test Event [Work]');
+  });
+});
+
+describe('ProfileMatcher', () => {
+  test('should set and use current time', () => {
+    const matcher = new ProfileMatcher();
+    const testTime = new Date('2022-01-01T10:30:00Z');
+    matcher.setCurrentTime(testTime);
+
+    const events = [
+      new CalendarEvent('Test [Work]', new Date('2022-01-01T10:00:00Z'), new Date('2022-01-01T11:00:00Z'))
+    ];
+
+    const result = matcher.findMatchingProfile(events, '[Work]', 'Work');
+    expect(result).toBe('Work');
+  });
+
+  test('should validate profiles correctly', () => {
+    const matcher = new ProfileMatcher();
+
+    expect(matcher.isValidProfile({ name: 'Work', keyword: '[Work]' })).toBe(true);
+    expect(matcher.isValidProfile({ name: 'Manual', keyword: null })).toBe(false);
+    expect(matcher.isValidProfile({ name: 'Empty', keyword: '' })).toBe(false);
+    expect(matcher.isValidProfile({ name: 'Whitespace', keyword: '   ' })).toBe(false);
+  });
+
+  test('should find matching profile', () => {
+    const matcher = new ProfileMatcher();
+    matcher.setCurrentTime(new Date('2022-01-01T10:30:00Z'));
+
+    const events = [
+      new CalendarEvent('Meeting [Work]', new Date('2022-01-01T10:00:00Z'), new Date('2022-01-01T11:00:00Z')),
+      new CalendarEvent('Inactive [Study]', new Date('2022-01-01T09:00:00Z'), new Date('2022-01-01T09:30:00Z'))
+    ];
+
+    const result = matcher.findMatchingProfile(events, '[Work]', 'Work');
+    expect(result).toBe('Work');
+  });
+
+  test('should return null for no matches', () => {
+    const matcher = new ProfileMatcher();
+    const events = [
+      new CalendarEvent('No keyword', new Date(), new Date())
+    ];
+
+    const result = matcher.findMatchingProfile(events, '[Work]', 'Work');
+    expect(result).toBe(null);
+  });
+});
+
+describe('CalendarService', () => {
+  let mockClient;
+  let mockMatcher;
+  let calendarService;
+
+  beforeEach(() => {
+    mockClient = {
+      fetchEvents: jest.fn()
+    };
+    mockMatcher = {
+      isValidProfile: jest.fn(),
+      findMatchingProfile: jest.fn(),
+      setCurrentTime: jest.fn()
+    };
+    calendarService = new CalendarService(mockClient, mockMatcher);
+  });
+
+  test('should get active focus profile name', async () => {
+    const profiles = [
+      { name: 'Work', keyword: '[Work]' },
+      { name: 'Study', keyword: '[Study]' }
+    ];
+
+    const mockEvents = [
+      new CalendarEvent('Meeting [Work]', new Date(), new Date())
+    ];
+
+    mockMatcher.isValidProfile.mockReturnValue(true);
+    mockClient.fetchEvents.mockResolvedValue(mockEvents);
+    mockMatcher.findMatchingProfile
+      .mockReturnValueOnce(null)
+      .mockReturnValueOnce('Work');
+
+    const result = await calendarService.getActiveFocusProfileName('token', profiles);
+
+    expect(result).toBe('Work');
+    expect(mockClient.fetchEvents).toHaveBeenCalledTimes(2);
+  });
+
+  test('should return null when no profiles are active', async () => {
+    const profiles = [{ name: 'Work', keyword: '[Work]' }];
+
+    mockMatcher.isValidProfile.mockReturnValue(true);
+    mockClient.fetchEvents.mockResolvedValue([]);
+    mockMatcher.findMatchingProfile.mockReturnValue(null);
+
+    const result = await calendarService.getActiveFocusProfileName('token', profiles);
+
+    expect(result).toBe(null);
+  });
+
+  test('should handle unauthorized errors', async () => {
+    const profiles = [{ name: 'Work', keyword: '[Work]' }];
+
+    mockMatcher.isValidProfile.mockReturnValue(true);
+    mockClient.fetchEvents.mockRejectedValue(new Error('Unauthorized'));
+
+    await expect(calendarService.getActiveFocusProfileName('token', profiles)).rejects.toThrow('Unauthorized');
+  });
+
+  test('should check if any profile is active', async () => {
+    const profiles = [{ name: 'Work', keyword: '[Work]' }];
+
+    // Mock getActiveFocusProfileName by spying on it
+    jest.spyOn(calendarService, 'getActiveFocusProfileName').mockResolvedValue('Work');
+
+    const result = await calendarService.hasActiveProfile('token', profiles);
+
+    expect(result).toBe(true);
+  });
+
+  test('should get all active profiles', async () => {
+    const profiles = [
+      { name: 'Work', keyword: '[Work]' },
+      { name: 'Study', keyword: '[Study]' }
+    ];
+
+    mockMatcher.isValidProfile.mockReturnValue(true);
+    mockClient.fetchEvents.mockResolvedValue([]);
+    mockMatcher.findMatchingProfile
+      .mockReturnValueOnce('Work')
+      .mockReturnValueOnce('Study');
+
+    const result = await calendarService.getAllActiveProfiles('token', profiles);
+
+    expect(result).toEqual(['Work', 'Study']);
+  });
+
+  test('should set current time', () => {
+    const testTime = new Date();
+    calendarService.setCurrentTime(testTime);
+
+    expect(mockMatcher.setCurrentTime).toHaveBeenCalledWith(testTime);
   });
 });
