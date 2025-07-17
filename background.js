@@ -1,11 +1,19 @@
 // background.js
 import * as constants from './constants.js';
-// Import state functions for manual focus time
-import { getBlockedTabs, removeBlockedTab, clearBlockedTabs, loadStateFromStorage, initializeSettings, getManualFocusEndTime, setManualFocusEndTime, clearManualFocusEndTime, updatePopupState } from './state.js';
+import {
+    loadStateFromStorage, initializeSettings, updatePopupState,
+    getManualFocusEndTime, setManualFocusEndTime, clearManualFocusEndTime,
+    // Exception state functions
+    getExceptionData, calculateAvailableExceptionMs, addExceptionUsage,
+    getExceptionEndTime, setExceptionEndTime,
+    // Blocked tabs functions
+    getBlockedTabs, removeBlockedTab, clearBlockedTabs, addBlockedTab
+} from './state.js';
 import { getAuthToken, removeCachedAuthToken } from './auth.js';
 import { getActiveFocusProfileName } from './calendar.js';
 import { updateBlockingRules } from './blocking.js';
 import { checkAndBlockTabIfNeeded, checkExistingTabs } from './tabs.js';
+import { fetchValidVideosFromCreators } from './youtubeApi.js';
 
 // --- Global State ---
 // currentFocusState useful for quick checks in listeners & transition logic
@@ -13,8 +21,8 @@ let currentFocusState = false;
 let currentActiveProfileName = null; // Track the currently active profile name
 
 // --- Helper function to restore tabs ---
-async function restoreBlockedTabs() {
-    console.log("Attempting to restore blocked tabs...");
+async function restoreBlockedTabs(keepMap = false) {
+    console.log("Attempting to restore blocked tabs...", keepMap ? "(Keep Map Flag)" : "");
     const map = await getBlockedTabs();
     const tabsToRestore = Object.entries(map); // [ [tabId, url], ... ]
     let restoredCount = 0;
@@ -49,8 +57,12 @@ async function restoreBlockedTabs() {
         }
     }
     console.log(`Finished restoring tabs. Attempted: ${tabsToRestore.length}, Actually Restored: ${restoredCount}`);
-    // Clear the map AFTER attempting restoration
-    await clearBlockedTabs();
+    // Clear the map ONLY if keepMap is false
+    if (!keepMap) {
+        await clearBlockedTabs();
+    } else {
+        console.log("Skipping map clear due to keepMap flag.");
+    }
 }
 
 
@@ -121,6 +133,17 @@ async function startManualFocus(durationMinutes) {
         return;
     }
 
+    // *** Check for active exception ***
+    const activeExceptionEnd = await getExceptionEndTime();
+    if (activeExceptionEnd) {
+        console.warn("Manual focus start ignored: Exception is active.");
+        // Don't start manual focus if exception is running
+        updatePopupState("Exception Active", null, activeExceptionEnd);
+        return;
+    }
+    // ********************************
+
+
     // 3. Calculate end time and store it
     const now = Date.now();
     const endTime = now + durationMinutes * 60 * 1000;
@@ -140,12 +163,12 @@ async function startManualFocus(durationMinutes) {
         await updateBlockingRules(true, rulesForManual, state.globalBlockMessage, state.redirectUrl); // Apply manual rules
         currentActiveProfileName = manualProfileName; // Set active profile
         currentFocusState = true;
-        updatePopupState(`Focus Active (Manual)`, endTime);
+        updatePopupState(`Focus Active (Manual)`, endTime, null);
         await checkExistingTabs(rulesForManual, state.globalBlockMessage, state.redirectUrl); // Check tabs with manual rules
         createManualEndAlarm(endTime);
     } catch (error) {
         console.error("!!! Error starting manual focus:", error);
-        updatePopupState('Error starting focus');
+        updatePopupState('Error starting focus', null, null);
         await clearManualFocusEndTime(); // Clean up stored time on error
         currentFocusState = false; // Reset focus state
         // Attempt to clear rules as well
@@ -166,13 +189,24 @@ async function stopManualFocus() {
     await clearManualEndAlarm();
     await clearManualFocusEndTime();
 
+    // *** Also stop any active exception when manual focus is stopped ***
+    const activeExceptionEnd = await getExceptionEndTime();
+    if (activeExceptionEnd) {
+        console.log("Stopping active exception because manual focus was stopped.");
+        await stopException(); // This clears exception state & alarm
+        // stopException now triggers checkCalendarAndSetBlocking, so we might not need the one below
+        return; // stopException handles the next steps
+    }
+    // *********************************************************************
+
+
     console.log("<<< Stopping MANUAL focus mode.");
     currentActiveProfileName = null; // Clear active profile BEFORE check
 
     try {
         await updateBlockingRules(false, [], '', null); // Clear rules first
         currentFocusState = false;
-        updatePopupState('Focus Inactive', null);
+        updatePopupState('Focus Inactive', null, null);
         await restoreBlockedTabs();
 
         console.log("Triggering calendar check after stopping manual focus.");
@@ -184,10 +218,93 @@ async function stopManualFocus() {
     }
 }
 
+// --- Helper: Stop Exception (Internal Use) ---
+async function stopException(triggeredByAlarm = false) {
+    const currentEndTime = await getExceptionEndTime();
+    if (!currentEndTime) return; // Already stopped
+
+    console.log(">>> Stopping Exception Period <<<", triggeredByAlarm ? "(Alarm Triggered)" : "(Manual Trigger)");
+    await setExceptionEndTime(null); // Clear end time in storage
+    await chrome.alarms.clear(constants.EXCEPTION_END_ALARM);
+
+    // IMPORTANT: Re-evaluate focus state immediately after exception ends
+    console.log("Triggering focus check after stopping exception.");
+    checkCalendarAndSetBlocking(); // This will re-apply rules if needed
+}
+
+// --- Exception Control Functions ---
+async function startException() {
+    console.log("Attempting to start exception period...");
+
+    // 1. Check if focus (manual or calendar) is actually active
+    const manualEndTime = await getManualFocusEndTime();
+    if (!currentFocusState && !manualEndTime) {
+        console.warn("Exception start ignored: Focus is not active.");
+        requestStatusUpdateForPopup(); // Update popup state
+        return;
+    }
+
+    // 2. Check if exception is already active
+    const activeExceptionEnd = await getExceptionEndTime();
+    if (activeExceptionEnd) {
+        console.warn("Exception start ignored: Exception already active.");
+        return;
+    }
+
+    // 3. Check available time
+    const availableMs = await calculateAvailableExceptionMs();
+    if (availableMs <= 0) {
+        console.warn("Exception start ignored: No daily exception time remaining.");
+        requestStatusUpdateForPopup();
+        return;
+    }
+
+    // 4. Determine duration and end time
+    const durationMs = Math.min(constants.DEFAULT_EXCEPTION_DURATION_MS, availableMs);
+    const endTime = Date.now() + durationMs;
+    console.log(`Starting exception for ${durationMs / 1000}s. Ends at ${new Date(endTime)}`);
+
+    // 5. Update usage, set end time, create alarm
+    await addExceptionUsage(durationMs);
+    await setExceptionEndTime(endTime);
+    await chrome.alarms.create(constants.EXCEPTION_END_ALARM, { when: endTime });
+
+    // 6. Temporarily disable blocking rules
+    console.log("Temporarily disabling blocking rules for exception.");
+    // Pass empty rules array to signal removal to updateBlockingRules
+    const state = await loadStateFromStorage(); // Need redirect URL
+    await updateBlockingRules(false, [], '', state.redirectUrl); // Force removal
+
+    // 7. Update popup state
+    updatePopupState("Exception Active", manualEndTime, endTime);
+
+     // 8. Restore any currently blocked tabs immediately
+     await restoreBlockedTabs(true); // Pass flag to skip clearing map
+
+}
+
 
 // --- Main Calendar Checking and State Logic (Modified) ---
 async function checkCalendarAndSetBlocking() {
     console.log("--- Running Check Check ---");
+
+    // *** Check for active exception FIRST ***
+    const activeExceptionEnd = await getExceptionEndTime();
+    if (activeExceptionEnd) {
+        console.log("Exception period is active until:", new Date(activeExceptionEnd));
+        if (currentFocusState) { // If focus *was* active, ensure rules are off
+             console.log("Ensuring blocking rules are disabled during exception.");
+             const stateForUrl = await loadStateFromStorage(); // Need redirect URL
+             await updateBlockingRules(false, [], '', stateForUrl.redirectUrl);
+             // Keep currentFocusState=true internally to know focus *should* resume later
+        }
+         // Update popup (manual time might still be relevant if exception started during manual)
+         const manualEndTimeCheck = await getManualFocusEndTime();
+        updatePopupState("Exception Active", manualEndTimeCheck, activeExceptionEnd);
+        console.log("--- Finished Check (Exception Active) ---");
+        return; // Skip all other checks
+    }
+
     let state = await loadStateFromStorage(); // Contains profilesConfig and processedSitesConfig
     let manualEndTime = await getManualFocusEndTime();
     let activeProfileName = null; // Profile for *this* check cycle
@@ -213,7 +330,7 @@ async function checkCalendarAndSetBlocking() {
                    await restoreBlockedTabs(); // Attempt restore on error exit
                    currentActiveProfileName = null; // Reset active profile
                 }
-                updatePopupState('Auth Required', null);
+                updatePopupState('Auth Required', null, null);
                 // Don't clear calendar alarm, user might authorize soon
                 return; // Stop calendar check
             }
@@ -229,7 +346,7 @@ async function checkCalendarAndSetBlocking() {
                 currentFocusState = false;
                 await restoreBlockedTabs(); // Attempt restore on error exit
             }
-            updatePopupState('Disabled', null); // Ensure manual time is null
+            updatePopupState('Disabled', null, null); // Ensure manual time is null
             clearAlarm(); // Clear calendar alarm
             await clearManualEndAlarm(); // Also clear manual just in case
             return;
@@ -258,7 +375,7 @@ async function checkCalendarAndSetBlocking() {
                     await updateBlockingRules(true, rulesForProfile, state.globalBlockMessage, state.redirectUrl); // Pass FILTERED rules
                     currentFocusState = true; // Still useful for simple checks
                     currentActiveProfileName = activeProfileName;
-                    updatePopupState(`Focus Active (${activeProfileName})`, manualEndTime);
+                    updatePopupState(`Focus Active (${activeProfileName})`, manualEndTime, null);
                     // Check tabs only when *starting* a focus session from inactive
                     await checkExistingTabs(rulesForProfile, state.globalBlockMessage, state.redirectUrl); // Pass FILTERED rules
 
@@ -267,14 +384,14 @@ async function checkCalendarAndSetBlocking() {
                     await updateBlockingRules(false, [], state.globalBlockMessage, state.redirectUrl); // Clear rules
                     currentFocusState = false;
                     currentActiveProfileName = null;
-                    updatePopupState('Focus Inactive', null);
+                    updatePopupState('Focus Inactive', null, null);
                     await restoreBlockedTabs();
             }
         } else if (activeProfileName) {
                 // Still in the same profile, just ensure rules are up-to-date
                 console.log(`--- Still in profile: ${activeProfileName}`);
                 await updateBlockingRules(true, rulesForProfile, state.globalBlockMessage, state.redirectUrl); // Pass FILTERED rules
-                updatePopupState(`Focus Active (${activeProfileName})`, manualEndTime);
+                updatePopupState(`Focus Active (${activeProfileName})`, manualEndTime, null);
                 currentFocusState = true; // Ensure true
                 await checkExistingTabs(rulesForProfile, state.globalBlockMessage, state.redirectUrl); // Pass FILTERED rules
         } else {
@@ -285,14 +402,14 @@ async function checkCalendarAndSetBlocking() {
                     currentFocusState = false;
                     await restoreBlockedTabs(); // Attempt restore on error exit
                 }
-                updatePopupState('Focus Inactive', null);
+                updatePopupState('Focus Inactive', null, null);
         }
 
        
 
         if (!state.redirectUrl) {
             console.error("Redirect URL is not set. Cannot perform check.");
-            updatePopupState('Error: Setup', null);
+            updatePopupState('Error: Setup', null, null);
             return; // Cannot proceed
         }
 
@@ -310,9 +427,9 @@ async function checkCalendarAndSetBlocking() {
                 currentFocusState = false;
                 await restoreBlockedTabs(); // *** Attempt restore on error exit ***
             }
-            updatePopupState('Auth Required', null); // Manual end time is null here
+            updatePopupState('Auth Required', null, null); // Manual end time is null here
         } else if (error.message.includes('Rule Limit Exceeded')) {
-             updatePopupState('Error: Rule Limit', currentManualEndTime); // Preserve manual time if relevant
+             updatePopupState('Error: Rule Limit', currentManualEndTime, null); // Preserve manual time if relevant
              // Maybe disable extension or just stop blocking? For now, just log.
              console.error("Cannot enforce blocking due to rule limit.");
              if (currentFocusState) { // Ensure we transition *out* of a state we can't enforce
@@ -322,7 +439,7 @@ async function checkCalendarAndSetBlocking() {
              }
         } else {
             // General error
-            updatePopupState('Error', currentManualEndTime); // Preserve manual time if relevant
+            updatePopupState('Error', currentManualEndTime, null); // Preserve manual time if relevant
             // Assume not in focus on unexpected error and try to clear rules
             if (currentFocusState) {
                 try { await updateBlockingRules(false, [], '', null); } catch (cleanupError) {console.warn("Error during cleanup rules on general error:", cleanupError);}
@@ -367,6 +484,13 @@ chrome.alarms.onAlarm.addListener(alarm => {
         // Manual focus should end now
         stopManualFocus(); // Call the stop function
     }
+    // *** Handle Exception End Alarm ***
+    else if (alarm.name === constants.EXCEPTION_END_ALARM) {
+        console.log(`Alarm "${alarm.name}" triggered.`);
+        stopException(true); // Call stop function, indicate it was alarm
+    }
+    // *********************************
+
 });
 
 // Storage Change Listener (Restored Detail)
@@ -378,7 +502,8 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
 
     // --- 1. Handle Disable Event Immediately ---
     if (changes.isEnabled !== undefined && changes.isEnabled.newValue === false) {
-        console.log("Extension is now disabled via settings. Cleaning up immediately.");
+        console.log("Extension disabled via settings. Stopping any active exception.");
+        await stopException(); // Stop exception if active
         await clearManualEndAlarm();
         await clearManualFocusEndTime();
         if (currentActiveProfileName) { // Check if any profile was active
@@ -478,10 +603,17 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
 
 // Tab Update Listener (URL change)
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    // Use changeInfo.url as it's often the most reliable indicator of the *new* URL
-    // Check if focus is active (either type) - Need current profile name
+    // *** Check for active exception ***
+    const activeExceptionEnd = await getExceptionEndTime();
+    if (activeExceptionEnd) {
+        console.log("[onUpdated] Skipping block check - Exception Active");
+        return; // Do not block if exception is active
+    }
+    // ********************************
+
+    // If no exception, proceed with existing logic:
     const manualEndTime = await getManualFocusEndTime();
-    const isActive = currentFocusState || manualEndTime; // Check if any focus is active
+    const isActive = currentFocusState || manualEndTime;
 
     // Proceed only if focus is active and URL changed
     if (isActive && changeInfo.url && tab) {
@@ -514,9 +646,17 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 
 // Tab Activation Listener (Switching Tabs)
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
-    // Check if focus is active - Need current profile name
+    // *** Check for active exception ***
+    const activeExceptionEnd = await getExceptionEndTime();
+    if (activeExceptionEnd) {
+        console.log("[onActivated] Skipping block check - Exception Active");
+        return; // Do not block if exception is active
+    }
+    // ********************************
+
+    // If no exception, proceed with existing logic:
     const manualEndTime = await getManualFocusEndTime();
-    const isActive = currentFocusState || manualEndTime; // Check if any focus is active
+    const isActive = currentFocusState || manualEndTime;
 
     if (isActive) {
         console.log(`[Tab Listener] Tab activated: ${activeInfo.tabId}`);
@@ -569,57 +709,71 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             .catch(e => sendResponse({ success: false, error: e.message }));
         return true; // Indicate async response
     }
+    if (request.action === "startException") {
+        startException().then(() => sendResponse({ success: true })).catch(e => sendResponse({ success: false, error: e.message }));
+        return true; // Indicate async response
+    }
     // New handler to provide full status to popup
     if (request.action === "getPopupStatus") {
-         Promise.all([
-             chrome.storage.local.get(['extensionStatus', constants.MANUAL_FOCUS_END_TIME_KEY]),
-             chrome.storage.sync.get('isEnabled') // Also check if enabled
-         ]).then(([localData, syncData]) => {
-             const isEnabled = syncData.isEnabled === undefined ? true : syncData.isEnabled;
-             let status = localData.extensionStatus;
-             // If disabled, override any other status
-             if (!isEnabled) {
-                 status = 'Disabled';
-             }
-             sendResponse({
-                 extensionStatus: status,
-                 manualFocusEndTime: localData[constants.MANUAL_FOCUS_END_TIME_KEY] || null
-             });
-         }).catch(error => {
-              console.error("Error getting popup status:", error);
-              sendResponse(null); // Indicate error to popup
-         });
+        Promise.all([
+            chrome.storage.local.get(['extensionStatus', constants.MANUAL_FOCUS_END_TIME_KEY, constants.EXCEPTION_END_TIME_KEY]),
+            calculateAvailableExceptionMs() // Calculate available time
+        ]).then(([localData, availableMs]) => {
+            sendResponse({
+                extensionStatus: localData.extensionStatus,
+                manualFocusEndTime: localData[constants.MANUAL_FOCUS_END_TIME_KEY] || null,
+                exceptionEndTime: localData[constants.EXCEPTION_END_TIME_KEY] || null,
+                availableExceptionMs: availableMs // Send available time to popup
+            });
+        }).catch(error => {
+            console.error("Error getting popup status:", error);
+            sendResponse(null); // Indicate error to popup
+        });
         return true; // Indicate async response
     }
 
     // Existing handlers
-     if (request.action === "settingsUpdated") {
-         console.log("Received 'settingsUpdated' message. Triggering state reload and check.");
-         // Run checkCalendarAndSetBlocking to react to potential changes
-         checkCalendarAndSetBlocking();
-         // No response needed here, options page doesn't wait
-         return false; // Indicate sync response or no response
-     }
-     if (request.action === "getAuthStatus") {
-         getAuthToken(false).then(token => {
-             sendResponse({ isAuthorized: !!token });
-         });
-         return true; // Indicate async response
-     }
-     if (request.action === "triggerManualCheck") {
-          console.log("Manual check triggered via message.");
-          checkCalendarAndSetBlocking().then(() => {
-                sendResponse({ status: "Check initiated." });
-          }).catch(e => {
-                 sendResponse({ status: "Check failed.", error: e.message });
-          });
-          return true; // Indicate async response
-     }
-     if (request.action === "updateOptionsAuthStatus") {
-         // Message sent *from* background *to* options. No response needed.
-         console.log("Ignoring 'updateOptionsAuthStatus' received by background.");
-         return false;
-     }
+    if (request.action === "settingsUpdated") {
+        console.log("Received 'settingsUpdated' message. Triggering state reload and check.");
+        // Run checkCalendarAndSetBlocking to react to potential changes
+        checkCalendarAndSetBlocking();
+        // No response needed here, options page doesn't wait
+        return false; // Indicate sync response or no response
+    }
+
+    if (request.action === "getAuthStatus") {
+        getAuthToken(false).then(token => {
+            sendResponse({ isAuthorized: !!token });
+        });
+        return true; // Indicate async response
+    }
+    if (request.action === "triggerManualCheck") {
+        console.log("Manual check triggered via message.");
+        checkCalendarAndSetBlocking().then(() => {
+            sendResponse({ status: "Check initiated." });
+        }).catch(e => {
+                sendResponse({ status: "Check failed.", error: e.message });
+        });
+        return true; // Indicate async response
+    }
+    if (request.action === "updateOptionsAuthStatus") {
+        // Message sent *from* background *to* options. No response needed.
+        console.log("Ignoring 'updateOptionsAuthStatus' received by background.");
+        return false;
+    }
+
+    if (request.action === "fetchSubscriptionVideos") {
+        console.log("Received request to fetch valid videos from curated creators.");
+        fetchValidVideosFromCreators()
+            .then(videos => {
+                sendResponse({ success: true, videos: videos });
+            })
+            .catch(error => {
+                console.error("Background error fetching valid videos:", error);
+                sendResponse({ success: false, error: error.message });
+            });
+        return true; // Indicate async response
+    }
 
 
     // Default: Ignore unknown messages
@@ -633,8 +787,9 @@ console.log("Background script executing/restarting.");
 // Perform initial check and set up alarms on startup
 Promise.all([
     chrome.alarms.get(constants.CALENDAR_CHECK_ALARM),
-    getManualFocusEndTime() // Check if manual focus should be active
-]).then(async ([existingCalendarAlarm, manualEndTime]) => { // Make async for await inside
+    getManualFocusEndTime(),
+    getExceptionEndTime() // Check exception state on startup
+]).then(async ([existingCalendarAlarm, manualEndTime, exceptionEndTime]) => {
     const state = await loadStateFromStorage(); // Load state early for enable check
 
     if (!state.isEnabled) {
@@ -649,8 +804,13 @@ Promise.all([
          return; // Stop further startup logic if disabled
     }
 
-    // If enabled, proceed with checking focus modes
-    if (manualEndTime) {
+    if (exceptionEndTime) {
+        console.log("Exception session ongoing on startup. Ensuring state.");
+        // Ensure blocking is OFF and alarm exists
+        chrome.alarms.create(constants.EXCEPTION_END_ALARM, { when: exceptionEndTime }); // Recreate alarm
+        // Trigger a check which will see the exception and update state/popup
+        setTimeout(checkCalendarAndSetBlocking, 1000);
+    } else if (manualEndTime) {
         console.log("Manual focus session ongoing on startup. Ensuring state.");
         // Ensure focus is marked active, rules applied, and end alarm exists
         currentFocusState = true; // Assume focus is active
@@ -683,3 +843,15 @@ Promise.all([
      // setTimeout(checkCalendarAndSetBlocking, 3000);
      // scheduleNextCheck();
 });
+
+// Helper to request status update for popup (useful after actions)
+function requestStatusUpdateForPopup() {
+    calculateAvailableExceptionMs().then(availableMs => {
+         return chrome.storage.local.get(['extensionStatus', constants.MANUAL_FOCUS_END_TIME_KEY, constants.EXCEPTION_END_TIME_KEY]).then(localData => ({ availableMs, localData }));
+    }).then(({ availableMs, localData}) => {
+         // We don't have a direct way to send to popup from background easily,
+         // but updating local storage triggers popup listener
+         updatePopupState(localData.extensionStatus, localData[constants.MANUAL_FOCUS_END_TIME_KEY], localData[constants.EXCEPTION_END_TIME_KEY]);
+         console.log("Forcing popup update via storage change.");
+    }).catch(e => console.error("Error requesting status update for popup:", e));
+}

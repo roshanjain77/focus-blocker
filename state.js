@@ -1,6 +1,103 @@
 // state.js - OOP Refactored State Management with Repository Pattern
-import { defaultSitesConfigForBG, defaultGlobalMessageForBG, defaultFocusKeyword, MANUAL_FOCUS_END_TIME_KEY, BLOCKED_TABS_MAP_KEY } from './constants.js';
-import { DomainParser } from './utils.js';
+import { defaultSitesConfigForBG, defaultGlobalMessageForBG, defaultFocusKeyword, MANUAL_FOCUS_END_TIME_KEY, BLOCKED_TABS_MAP_KEY, EXCEPTION_DATA_KEY, EXCEPTION_END_TIME_KEY, DAILY_EXCEPTION_TOTAL_MS, NIGHTLY_EXCEPTION_LIMIT_MS, NIGHT_START_HOUR, NIGHT_END_HOUR } from './constants.js';
+import { DomainParser, extractDomain } from './utils.js';
+
+// --- Helper Functions ---
+function getTodayDateString() {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+function isCurrentlyNight() {
+    const currentHour = new Date().getHours();
+    return currentHour >= NIGHT_START_HOUR && currentHour < NIGHT_END_HOUR;
+}
+// --- End Helpers ---
+
+
+/** Gets exception data, resetting daily limits if necessary. */
+export async function getExceptionData() {
+    try {
+        const data = await chrome.storage.local.get(EXCEPTION_DATA_KEY);
+        let exceptionData = data[EXCEPTION_DATA_KEY];
+        const today = getTodayDateString();
+
+        if (!exceptionData || exceptionData.lastResetDate !== today) {
+            console.log("Resetting daily exception usage for", today);
+            exceptionData = {
+                lastResetDate: today,
+                dayUsedMs: 0,
+                nightUsedMs: 0
+            };
+            // Save the reset data immediately
+            await chrome.storage.local.set({ [EXCEPTION_DATA_KEY]: exceptionData });
+        }
+        return exceptionData;
+    } catch (error) {
+        console.error("Error getting/resetting exception data:", error);
+        // Return default zeroed data on error
+        return { lastResetDate: getTodayDateString(), dayUsedMs: 0, nightUsedMs: 0 };
+    }
+}
+
+/** Calculates available exception time in milliseconds for the *next* request. */
+export async function calculateAvailableExceptionMs() {
+    const data = await getExceptionData(); // Ensures data is current/reset
+    const totalUsedMs = data.dayUsedMs + data.nightUsedMs;
+    const totalRemainingMs = Math.max(0, DAILY_EXCEPTION_TOTAL_MS - totalUsedMs);
+
+    if (isCurrentlyNight()) {
+        const nightRemainingMs = Math.max(0, NIGHTLY_EXCEPTION_LIMIT_MS - data.nightUsedMs);
+        return Math.min(totalRemainingMs, nightRemainingMs);
+    } else {
+        // During the day, only the total limit applies
+        return totalRemainingMs;
+    }
+}
+
+/** Updates the stored exception usage. */
+export async function addExceptionUsage(durationMs) {
+    if (durationMs <= 0) return;
+    try {
+        const data = await getExceptionData(); // Get current/reset data
+        if (isCurrentlyNight()) {
+            data.nightUsedMs += durationMs;
+        } else {
+            data.dayUsedMs += durationMs;
+        }
+        await chrome.storage.local.set({ [EXCEPTION_DATA_KEY]: data });
+        console.log(`Added exception usage: ${durationMs}ms. New state:`, data);
+    } catch (error) {
+        console.error("Error updating exception usage:", error);
+    }
+}
+
+/** Gets the current exception end time. */
+export async function getExceptionEndTime() {
+    try {
+        const data = await chrome.storage.local.get(EXCEPTION_END_TIME_KEY);
+        const endTime = data[EXCEPTION_END_TIME_KEY];
+        // Return null if expired
+        return (endTime && endTime > Date.now()) ? endTime : null;
+    } catch (error) {
+        console.error("Error getting exception end time:", error);
+        return null;
+    }
+}
+
+/** Sets the exception end time. */
+export async function setExceptionEndTime(endTime) {
+     try {
+        await chrome.storage.local.set({ [EXCEPTION_END_TIME_KEY]: endTime });
+        console.log("Exception end time set:", endTime ? new Date(endTime) : 'Cleared');
+    } catch (error) {
+        console.error("Error setting exception end time:", error);
+    }
+}
+
 
 /**
  * Profile domain model
@@ -84,7 +181,7 @@ export class DomainRule extends BlockingRule {
         const domains = this.domain.split(',')
             .map(part => part.trim())
             .filter(p => p)
-            .map(potentialDomain => DomainParser.extractDomain(potentialDomain))
+            .map(potentialDomain => extractDomain(potentialDomain))
             .filter(validDomain => validDomain);
 
         return domains.map(domain => 
@@ -269,7 +366,6 @@ export class StateRepository {
             console.error("Error initializing settings:", error);
         }
     }
-}
 
 /**
  * Repository for manual focus session management
@@ -323,11 +419,13 @@ export class FocusSessionRepository {
      * Updates popup state
      * @param {string} statusText - Status text to display
      * @param {number|null} manualEndTime - Manual focus end time or null
+     * @param {number|null} exceptionEndTime - Exception end time or null
      */
-    updatePopupState(statusText, manualEndTime = null) {
+    updatePopupState(statusText, manualEndTime = null, exceptionEndTime = null) {
         const stateToSet = { 
             extensionStatus: statusText,
-            [MANUAL_FOCUS_END_TIME_KEY]: manualEndTime
+            [MANUAL_FOCUS_END_TIME_KEY]: manualEndTime,
+            [EXCEPTION_END_TIME_KEY]: exceptionEndTime
         };
 
         this.localStorage.set(stateToSet).catch(error => {
@@ -441,9 +539,9 @@ export async function clearManualFocusEndTime() {
     return repository.clearManualFocusEndTime();
 }
 
-export function updatePopupState(statusText, manualEndTime = null) {
+export function updatePopupState(statusText, manualEndTime = null, exceptionEndTime = null) {
     const repository = new FocusSessionRepository();
-    return repository.updatePopupState(statusText, manualEndTime);
+    return repository.updatePopupState(statusText, manualEndTime, exceptionEndTime);
 }
 
 export async function initializeSettings() {

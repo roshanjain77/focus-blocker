@@ -36,6 +36,32 @@ const defaultGlobalMessage = '<h1>Site Blocked</h1><p>This site is blocked durin
 const defaultProfiles = [{ name: "Manual", keyword: null }]; // Default profile (Manual cannot be deleted)
 const defaultSitesConfig = []; // Start with no default rules now
 
+// --- Helper to show fetch status within a specific rule ---
+function showFetchStatus(fetchButton, message, isError = false) {
+    const statusSpan = fetchButton.nextElementSibling; // Get the adjacent span
+    if (statusSpan && statusSpan.classList.contains('fetch-status')) {
+        statusSpan.textContent = message;
+        statusSpan.style.color = isError ? 'red' : '#333';
+    }
+     // Re-enable button unless showing 'Loading...'
+    fetchButton.disabled = (message === 'Loading...');
+}
+
+/**
+ * Checks if a comma-separated domain string includes youtube.com or youtu.be.
+ * Case-insensitive.
+ * @param {string} domainString
+ * @returns {boolean}
+ */
+function containsYouTube(domainString) {
+    if (!domainString) return false;
+    return domainString.split(',').some(part => {
+        const trimmed = part.trim().toLowerCase();
+        return trimmed === 'youtube.com' || trimmed === 'youtu.be';
+    });
+}
+
+
 // --- Helper: Show feedback message ---
 function showStatus(message, isError = false) {
     statusDiv.textContent = message;
@@ -218,6 +244,8 @@ function createSiteEntryElement(siteData = {}) {
     const allowedVideosTextarea = content.querySelector('.allowed-videos');
     const profileCheckboxesContainer = content.querySelector('.profile-checkboxes-container');
     const deleteRuleButton = content.querySelector('.delete-button');
+    const fetchVideosButton = content.querySelector('.fetch-videos-button'); // Get fetch button
+
 
     // Assign unique ID if it's a new entry
     const entryId = siteData.id || crypto.randomUUID();
@@ -268,8 +296,77 @@ function createSiteEntryElement(siteData = {}) {
         }
     };
 
-    blockAllCheckbox.addEventListener('change', toggleRuleType);
+    // --- Logic to enable/disable Fetch Button ---
+    const toggleFetchButton = () => {
+        const hasYoutube = containsYouTube(domainInput.value);
+        const isBlockAll = blockAllCheckbox.checked;
+        fetchVideosButton.disabled = !hasYoutube || isBlockAll;
+        fetchVideosButton.style.display = hasYoutube ? 'inline-block' : 'none'; // Hide if not YT
+        // Clear status if button becomes disabled/hidden
+        if (!hasYoutube || isBlockAll) {
+            showFetchStatus(fetchVideosButton, "");
+        }
+    };
+
+    blockAllCheckbox.addEventListener('change', toggleFetchButton);
+    domainInput.addEventListener('input', toggleFetchButton);
+    toggleFetchButton(); // Initial check
     toggleRuleType(); // Set initial state
+
+    // --- Fetch Button Click Listener ---
+    fetchVideosButton.addEventListener('click', async (event) => {
+        event.preventDefault(); // Prevent potential form submission
+        const button = event.target;
+        showFetchStatus(button, "Loading...");
+
+        try {
+            // Send message to background to perform the fetch
+            const response = await chrome.runtime.sendMessage({ action: "fetchSubscriptionVideos" });
+
+            if (response && response.success && Array.isArray(response.videos)) {
+                showFetchStatus(button, `Fetched ${response.videos.length} videos. Appending...`);
+
+                // Get existing videos from textarea
+                const existingLines = allowedVideosTextarea.value.trim().split('\n').filter(l => l.trim() !== '');
+                const existingVideosMap = new Map(); // Use Map to handle potential duplicates easily
+                existingLines.forEach(line => {
+                    const parts = line.split('|');
+                    const id = parts[0]?.trim();
+                    const name = parts[1]?.trim() || id;
+                    if (id && /^[a-zA-Z0-9_-]{11}$/.test(id)) {
+                         // Keep existing name if present
+                        existingVideosMap.set(id, name);
+                    }
+                });
+
+                // Add fetched videos (only if not already present)
+                response.videos.forEach(fetchedVideo => {
+                    if (fetchedVideo.id && !existingVideosMap.has(fetchedVideo.id)) {
+                        existingVideosMap.set(fetchedVideo.id, fetchedVideo.name);
+                    }
+                });
+
+                // Format back to string for textarea
+                const updatedVideoLines = Array.from(existingVideosMap.entries())
+                                             .map(([id, name]) => `${id} | ${name}`);
+                allowedVideosTextarea.value = updatedVideoLines.join('\n');
+
+                showFetchStatus(button, `Appended ${response.videos.length} new videos.`);
+                // Note: Changes are staged, need to click "Save All"
+
+            } else {
+                 throw new Error(response?.error || "Failed to fetch videos.");
+            }
+        } catch (error) {
+            console.error("Error fetching subscription videos:", error);
+            showFetchStatus(button, `Error: ${error.message}`, true);
+             if (error.message.includes("Authorization") || error.message.includes("scope")) {
+                 showFetchStatus(button, "Error: Re-authorization needed (YouTube Permission).", true);
+                 // Optionally guide user to re-auth button
+             }
+        }
+    });
+    // --- End Fetch Button Listener ---
 
     // --- Delete Button ---
     deleteRuleButton.addEventListener('click', () => {
@@ -390,20 +487,24 @@ saveButton.addEventListener('click', () => {
                  isValid = false; // Skip saving this rule
             } else {
                 ruleData.domain = domainString;
-                 // Process Allowed Videos (only if not block all)
-                 const rawVideosInput = allowedVideosTextarea.value.trim();
-                 const allowedVideos = [];
-                 if (rawVideosInput) {
-                     rawVideosInput.split('\n').forEach(line => { /* ... parsing logic as before ... */
+
+                const rawVideosInput = allowedVideosTextarea.value.trim();
+                const allowedVideos = []; // Array of {id, name}
+                if (!isBlockAll && rawVideosInput) { // Only process if not blockAll
+                    rawVideosInput.split('\n').forEach(line => {
                         const parts = line.split('|');
                         const videoId = parts[0]?.trim();
                         const name = parts[1]?.trim() || videoId;
                         if (videoId && /^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
-                           allowedVideos.push({ id: videoId, name: name });
-                        }
-                     });
-                 }
-                 ruleData.allowedVideos = allowedVideos;
+                            allowedVideos.push({ id: videoId, name: name });
+                        } else if (videoId) { /* console warn */ }
+                    });
+                }
+                // Assign even if empty (and not blockAll)
+                if (!isBlockAll) {
+                    ruleData.allowedVideos = allowedVideos;
+                }
+
             }
         }
 

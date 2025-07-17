@@ -50,6 +50,23 @@
         .profiles-assignment-section div span label { /* Label next to checkbox */ font-weight: normal; font-size: 0.9em; margin-top: 0; }
         .allowed-videos-section { margin-top: 15px; padding-top: 10px; border-top: 1px dashed #ccc; display: block; /* Now always visible, but might be disabled */ }
         .allowed-videos-section textarea { min-height: 40px; font-family: monospace; font-size: 0.9em; }
+
+        .fetch-videos-button {
+            font-size: 0.8em;
+            padding: 3px 8px;
+            margin-left: 10px;
+            background-color: #1a73e8; /* YouTube-ish blue */
+            vertical-align: middle; /* Align with label */
+        }
+        .fetch-videos-button:hover { background-color: #1765cc; }
+        .fetch-videos-button:disabled { background-color: #ccc; cursor: not-allowed; }
+        .fetch-status { /* Small text for loading/error messages */
+            display: inline-block;
+            margin-left: 10px;
+            font-size: 0.8em;
+            color: #666;
+        }
+
     </style>
 </head>
 <body>
@@ -162,13 +179,18 @@
                  <textarea class="site-message" placeholder="Enter custom block message..."></textarea>
             </div>
 
-            <!-- Allowed Videos (disabled if blockAll is checked) -->
             <div class="allowed-videos-section">
-                <label>Allowed YouTube Videos (one per line: `VIDEO_ID | Display Name`):</label>
-                <textarea class="allowed-videos" placeholder="dQw4w9WgXcQ | My Favorite Song
-kfchvCyHmsc | Important Tutorial"></textarea>
+                <label>
+                    Allowed YouTube Videos (one per line: `VIDEO_ID | Display Name`):
+                    <!-- *** Update Button Text/Title (Optional) *** -->
+                    <button class="fetch-videos-button" title="Fetch latest video from pre-defined creators list">Fetch Latest</button>
+                    <span class="fetch-status"></span>
+                    <!-- ****************************************** -->
+                </label>
+                <textarea class="allowed-videos" placeholder="..."></textarea>
                 <p class="help-text"><small>Only applies if 'youtube.com' or 'youtu.be' is listed in domains.</small></p>
             </div>
+
 
             <!-- Profile Assignment -->
             <div class="profiles-assignment-section">

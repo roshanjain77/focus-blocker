@@ -22,3 +22,32 @@ export const CHECK_INTERVAL_MINUTES = 5; // Calendar check frequency
 
 export const MANUAL_FOCUS_END_ALARM = 'manualFocusEndAlarm';
 export const MANUAL_FOCUS_END_TIME_KEY = 'manualFocusEndTime'; // Storage key
+
+
+// Exception Tracking
+export const EXCEPTION_DATA_KEY = 'exceptionData'; // { lastResetDate: "YYYY-MM-DD", dayUsedMs: number, nightUsedMs: number }
+export const EXCEPTION_END_TIME_KEY = 'exceptionEndTime'; // Timestamp | null
+export const EXCEPTION_END_ALARM = 'exceptionEndAlarm'; // Alarm name
+
+// Exception Limits
+export const DAILY_EXCEPTION_TOTAL_MS = 1 * 60 * 60 * 1000; // 1 hour total
+export const NIGHTLY_EXCEPTION_LIMIT_MS = 30 * 60 * 1000; // 30 mins max during night
+export const DEFAULT_EXCEPTION_DURATION_MS = 15 * 60 * 1000; // Grant 15 mins per click (configurable maybe later)
+
+// Night Time Definition
+export const NIGHT_START_HOUR = 0; // 12:00 AM (inclusive)
+export const NIGHT_END_HOUR = 6;   // 6:00 AM (exclusive)
+
+export const CREATOR_VIDEOS_TO_CHECK = 5; // How many recent videos to check per creator for duration filter
+export const MIN_VIDEO_DURATION_SECONDS = 5 * 60; // 5 minutes
+export const MAX_VIDEO_DURATION_SECONDS = 25 * 60; // 25 minutes
+export const CURATED_CREATORS = [
+    { name: "Mathew Berman", channelId: "UCawZsQWqfGSbCI5yjkdVkTA" },
+    { name: "Markets By Zerodha", channelId: "UCXbKJML9pVclFHLFzpvBgWw" },
+    { name: "Slogo", channelId: "UCHdMK5Ef2El8KbD3L_WgANg" },
+    { name: "Finnogin", channelId: "UCaSFA101FujqVXnSbfOaH5w" },
+    { name: "Crainer", channelId: "UCEaReYkPVfExkfXptk0bSPw" },
+    { name: "WhostheBoss", channelId: "UCMiJRAwDNSNzuYeN2uWa0pA" },
+    { name: "The OG Crew" , channelId: "UCEEYC7-n3iCQSyZBAZOmpEg" },
+    // Add more creators as needed
+];

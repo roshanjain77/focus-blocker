@@ -12,20 +12,25 @@
     "declarativeNetRequestFeedback",
     "tabs"
   ],
-  "host_permissions": ["<all_urls>", "https://www.googleapis.com/"],
+  "host_permissions": [
+    "<all_urls>",
+    "https://www.googleapis.com/"
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
-
   "options_page": "options.html",
   "action": {
     "default_popup": "popup.html"
   },
   "icons": {},
   "oauth2": {
-    "client_id": "380009178393-d79pje6d7vjce0mqu0hb0d2ldv2fa0er.apps.googleusercontent.com",
-    "scopes": ["https://www.googleapis.com/auth/calendar.readonly"]
+    "client_id": "146478383812-mm1mp15trdskedddut1rcf82nbm4shth.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/calendar.readonly",
+      "https://www.googleapis.com/auth/youtube.readonly"
+    ]
   },
   "web_accessible_resources": [
     {
