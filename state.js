@@ -1,570 +1,619 @@
 // state.js - OOP Refactored State Management with Repository Pattern
-import { defaultSitesConfigForBG, defaultGlobalMessageForBG, defaultFocusKeyword, MANUAL_FOCUS_END_TIME_KEY, BLOCKED_TABS_MAP_KEY, EXCEPTION_DATA_KEY, EXCEPTION_END_TIME_KEY, DAILY_EXCEPTION_TOTAL_MS, NIGHTLY_EXCEPTION_LIMIT_MS, NIGHT_START_HOUR, NIGHT_END_HOUR } from './constants.js';
-import { DomainParser, extractDomain } from './utils.js';
+import {
+  defaultSitesConfigForBG,
+  defaultGlobalMessageForBG,
+  defaultFocusKeyword,
+  MANUAL_FOCUS_END_TIME_KEY,
+  BLOCKED_TABS_MAP_KEY,
+  EXCEPTION_DATA_KEY,
+  EXCEPTION_END_TIME_KEY,
+  DAILY_EXCEPTION_TOTAL_MS,
+  NIGHTLY_EXCEPTION_LIMIT_MS,
+  NIGHT_START_HOUR,
+  NIGHT_END_HOUR,
+} from "./constants.js";
+import { DomainParser, extractDomain } from "./utils.js";
 
 // --- Helper Functions ---
 function getTodayDateString() {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function isCurrentlyNight() {
-    const currentHour = new Date().getHours();
-    return currentHour >= NIGHT_START_HOUR && currentHour < NIGHT_END_HOUR;
+  const currentHour = new Date().getHours();
+  return currentHour >= NIGHT_START_HOUR && currentHour < NIGHT_END_HOUR;
 }
 // --- End Helpers ---
 
-
 /** Gets exception data, resetting daily limits if necessary. */
 export async function getExceptionData() {
-    try {
-        const data = await chrome.storage.local.get(EXCEPTION_DATA_KEY);
-        let exceptionData = data[EXCEPTION_DATA_KEY];
-        const today = getTodayDateString();
+  try {
+    const data = await chrome.storage.local.get(EXCEPTION_DATA_KEY);
+    let exceptionData = data[EXCEPTION_DATA_KEY];
+    const today = getTodayDateString();
 
-        if (!exceptionData || exceptionData.lastResetDate !== today) {
-            console.log("Resetting daily exception usage for", today);
-            exceptionData = {
-                lastResetDate: today,
-                dayUsedMs: 0,
-                nightUsedMs: 0
-            };
-            // Save the reset data immediately
-            await chrome.storage.local.set({ [EXCEPTION_DATA_KEY]: exceptionData });
-        }
-        return exceptionData;
-    } catch (error) {
-        console.error("Error getting/resetting exception data:", error);
-        // Return default zeroed data on error
-        return { lastResetDate: getTodayDateString(), dayUsedMs: 0, nightUsedMs: 0 };
+    if (!exceptionData || exceptionData.lastResetDate !== today) {
+      console.log("Resetting daily exception usage for", today);
+      exceptionData = {
+        lastResetDate: today,
+        dayUsedMs: 0,
+        nightUsedMs: 0,
+      };
+      // Save the reset data immediately
+      await chrome.storage.local.set({ [EXCEPTION_DATA_KEY]: exceptionData });
     }
+    return exceptionData;
+  } catch (error) {
+    console.error("Error getting/resetting exception data:", error);
+    // Return default zeroed data on error
+    return {
+      lastResetDate: getTodayDateString(),
+      dayUsedMs: 0,
+      nightUsedMs: 0,
+    };
+  }
 }
 
 /** Calculates available exception time in milliseconds for the *next* request. */
 export async function calculateAvailableExceptionMs() {
-    const data = await getExceptionData(); // Ensures data is current/reset
-    const totalUsedMs = data.dayUsedMs + data.nightUsedMs;
-    const totalRemainingMs = Math.max(0, DAILY_EXCEPTION_TOTAL_MS - totalUsedMs);
+  const data = await getExceptionData(); // Ensures data is current/reset
+  const totalUsedMs = data.dayUsedMs + data.nightUsedMs;
+  const totalRemainingMs = Math.max(0, DAILY_EXCEPTION_TOTAL_MS - totalUsedMs);
 
-    if (isCurrentlyNight()) {
-        const nightRemainingMs = Math.max(0, NIGHTLY_EXCEPTION_LIMIT_MS - data.nightUsedMs);
-        return Math.min(totalRemainingMs, nightRemainingMs);
-    } else {
-        // During the day, only the total limit applies
-        return totalRemainingMs;
-    }
+  if (isCurrentlyNight()) {
+    const nightRemainingMs = Math.max(
+      0,
+      NIGHTLY_EXCEPTION_LIMIT_MS - data.nightUsedMs
+    );
+    return Math.min(totalRemainingMs, nightRemainingMs);
+  } else {
+    // During the day, only the total limit applies
+    return totalRemainingMs;
+  }
 }
 
 /** Updates the stored exception usage. */
 export async function addExceptionUsage(durationMs) {
-    if (durationMs <= 0) return;
-    try {
-        const data = await getExceptionData(); // Get current/reset data
-        if (isCurrentlyNight()) {
-            data.nightUsedMs += durationMs;
-        } else {
-            data.dayUsedMs += durationMs;
-        }
-        await chrome.storage.local.set({ [EXCEPTION_DATA_KEY]: data });
-        console.log(`Added exception usage: ${durationMs}ms. New state:`, data);
-    } catch (error) {
-        console.error("Error updating exception usage:", error);
+  if (durationMs <= 0) return;
+  try {
+    const data = await getExceptionData(); // Get current/reset data
+    if (isCurrentlyNight()) {
+      data.nightUsedMs += durationMs;
+    } else {
+      data.dayUsedMs += durationMs;
     }
+    await chrome.storage.local.set({ [EXCEPTION_DATA_KEY]: data });
+    console.log(`Added exception usage: ${durationMs}ms. New state:`, data);
+  } catch (error) {
+    console.error("Error updating exception usage:", error);
+  }
 }
 
 /** Gets the current exception end time. */
 export async function getExceptionEndTime() {
-    try {
-        const data = await chrome.storage.local.get(EXCEPTION_END_TIME_KEY);
-        const endTime = data[EXCEPTION_END_TIME_KEY];
-        // Return null if expired
-        return (endTime && endTime > Date.now()) ? endTime : null;
-    } catch (error) {
-        console.error("Error getting exception end time:", error);
-        return null;
-    }
+  try {
+    const data = await chrome.storage.local.get(EXCEPTION_END_TIME_KEY);
+    const endTime = data[EXCEPTION_END_TIME_KEY];
+    // Return null if expired
+    return endTime && endTime > Date.now() ? endTime : null;
+  } catch (error) {
+    console.error("Error getting exception end time:", error);
+    return null;
+  }
 }
 
 /** Sets the exception end time. */
 export async function setExceptionEndTime(endTime) {
-     try {
-        await chrome.storage.local.set({ [EXCEPTION_END_TIME_KEY]: endTime });
-        console.log("Exception end time set:", endTime ? new Date(endTime) : 'Cleared');
-    } catch (error) {
-        console.error("Error setting exception end time:", error);
-    }
+  try {
+    await chrome.storage.local.set({ [EXCEPTION_END_TIME_KEY]: endTime });
+    console.log(
+      "Exception end time set:",
+      endTime ? new Date(endTime) : "Cleared"
+    );
+  } catch (error) {
+    console.error("Error setting exception end time:", error);
+  }
 }
-
 
 /**
  * Profile domain model
  */
 export class Profile {
-    constructor(name, keyword = null) {
-        this.name = name;
-        this.keyword = keyword;
-    }
+  constructor(name, keyword = null) {
+    this.name = name;
+    this.keyword = keyword;
+  }
 
-    static fromObject(obj) {
-        return new Profile(obj.name, obj.keyword);
-    }
+  static fromObject(obj) {
+    return new Profile(obj.name, obj.keyword);
+  }
 
-    toObject() {
-        return {
-            name: this.name,
-            keyword: this.keyword
-        };
-    }
+  toObject() {
+    return {
+      name: this.name,
+      keyword: this.keyword,
+    };
+  }
 }
 
 /**
  * Blocking rule domain model
  */
 export class BlockingRule {
-    constructor(id, profiles = [], message = null) {
-        this.id = id || crypto.randomUUID();
-        this.profiles = Array.isArray(profiles) ? profiles : [];
-        this.message = message;
-    }
+  constructor(id, profiles = [], message = null) {
+    this.id = id || crypto.randomUUID();
+    this.profiles = Array.isArray(profiles) ? profiles : [];
+    this.message = message;
+  }
 
-    static fromObject(obj) {
-        const id = obj.id || crypto.randomUUID();
-        const profiles = Array.isArray(obj.profiles) ? obj.profiles : [];
-        const message = obj.message || null;
+  static fromObject(obj) {
+    const id = obj.id || crypto.randomUUID();
+    const profiles = Array.isArray(obj.profiles) ? obj.profiles : [];
+    const message = obj.message || null;
 
-        if (obj.blockAll === true) {
-            return new BlockAllRule(id, profiles, message);
-        } else {
-            const domain = obj.domain || '';
-            const allowedVideos = Array.isArray(obj.allowedVideos) ? obj.allowedVideos : [];
-            return new DomainRule(id, profiles, domain, message, allowedVideos);
-        }
+    if (obj.blockAll === true) {
+      return new BlockAllRule(id, profiles, message);
+    } else {
+      const domain = obj.domain || "";
+      const allowedVideos = Array.isArray(obj.allowedVideos)
+        ? obj.allowedVideos
+        : [];
+      return new DomainRule(id, profiles, domain, message, allowedVideos);
     }
+  }
 
-    toObject() {
-        return {
-            id: this.id,
-            profiles: this.profiles,
-            message: this.message
-        };
-    }
+  toObject() {
+    return {
+      id: this.id,
+      profiles: this.profiles,
+      message: this.message,
+    };
+  }
 }
 
 /**
  * Domain-specific blocking rule
  */
 export class DomainRule extends BlockingRule {
-    constructor(id, profiles, domain, message = null, allowedVideos = []) {
-        super(id, profiles, message);
-        this.domain = domain;
-        this.allowedVideos = Array.isArray(allowedVideos) ? allowedVideos : [];
-    }
+  constructor(id, profiles, domain, message = null, allowedVideos = []) {
+    super(id, profiles, message);
+    this.domain = domain;
+    this.allowedVideos = Array.isArray(allowedVideos) ? allowedVideos : [];
+  }
 
-    toObject() {
-        return {
-            ...super.toObject(),
-            domain: this.domain,
-            allowedVideos: this.allowedVideos
-        };
-    }
+  toObject() {
+    return {
+      ...super.toObject(),
+      domain: this.domain,
+      allowedVideos: this.allowedVideos,
+    };
+  }
 
-    /**
-     * Expands comma-separated domains into individual rules
-     * @returns {Array<DomainRule>} Array of individual domain rules
-     */
-    expandDomains() {
-        if (!this.domain) return [];
+  /**
+   * Expands comma-separated domains into individual rules
+   * @returns {Array<DomainRule>} Array of individual domain rules
+   */
+  expandDomains() {
+    if (!this.domain) return [];
 
-        const domains = this.domain.split(',')
-            .map(part => part.trim())
-            .filter(p => p)
-            .map(potentialDomain => extractDomain(potentialDomain))
-            .filter(validDomain => validDomain);
+    const domains = this.domain
+      .split(",")
+      .map((part) => part.trim())
+      .filter((p) => p)
+      .map((potentialDomain) => extractDomain(potentialDomain))
+      .filter((validDomain) => validDomain);
 
-        return domains.map(domain => 
-            new DomainRule(this.id, this.profiles, domain, this.message, this.allowedVideos)
-        );
-    }
+    return domains.map(
+      (domain) =>
+        new DomainRule(
+          this.id,
+          this.profiles,
+          domain,
+          this.message,
+          this.allowedVideos
+        )
+    );
+  }
 }
 
 /**
  * Block-all rule
  */
 export class BlockAllRule extends BlockingRule {
-    constructor(id, profiles, message = null) {
-        super(id, profiles, message);
-        this.blockAll = true;
-    }
+  constructor(id, profiles, message = null) {
+    super(id, profiles, message);
+    this.blockAll = true;
+  }
 
-    toObject() {
-        return {
-            ...super.toObject(),
-            blockAll: true
-        };
-    }
+  toObject() {
+    return {
+      ...super.toObject(),
+      blockAll: true,
+    };
+  }
 }
 
 /**
  * Application state domain model
  */
 export class ApplicationState {
-    constructor() {
-        this.isEnabled = true;
-        this.profilesConfig = [new Profile("Manual", null)];
-        this.processedSitesConfig = [];
-        this.globalBlockMessage = defaultGlobalMessageForBG;
-        this.focusKeyword = '';
-        this.redirectUrl = chrome.runtime.getURL('blocked.html');
-    }
+  constructor() {
+    this.isEnabled = true;
+    this.profilesConfig = [new Profile("Manual", null)];
+    this.processedSitesConfig = [];
+    this.globalBlockMessage = defaultGlobalMessageForBG;
+    this.focusKeyword = "";
+    this.redirectUrl = chrome.runtime.getURL("blocked.html");
+  }
 
-    /**
-     * Sets processed rules and ensures they're all expanded domain rules
-     * @param {Array<BlockingRule>} rules - Array of blocking rules
-     */
-    setProcessedRules(rules) {
-        this.processedSitesConfig = rules.flatMap(rule => {
-            if (rule instanceof DomainRule) {
-                return rule.expandDomains();
-            } else if (rule instanceof BlockAllRule) {
-                return [rule];
-            }
-            return [];
-        });
-    }
+  /**
+   * Sets processed rules and ensures they're all expanded domain rules
+   * @param {Array<BlockingRule>} rules - Array of blocking rules
+   */
+  setProcessedRules(rules) {
+    this.processedSitesConfig = rules.flatMap((rule) => {
+      if (rule instanceof DomainRule) {
+        return rule.expandDomains();
+      } else if (rule instanceof BlockAllRule) {
+        return [rule];
+      }
+      return [];
+    });
+  }
 
-    /**
-     * Gets rules for a specific profile
-     * @param {string} profileName - Name of the profile
-     * @returns {Array<BlockingRule>} Rules assigned to the profile
-     */
-    getRulesForProfile(profileName) {
-        return this.processedSitesConfig.filter(rule => 
-            rule.profiles.includes(profileName)
-        );
-    }
+  /**
+   * Gets rules for a specific profile
+   * @param {string} profileName - Name of the profile
+   * @returns {Array<BlockingRule>} Rules assigned to the profile
+   */
+  getRulesForProfile(profileName) {
+    return this.processedSitesConfig.filter((rule) =>
+      rule.profiles.includes(profileName)
+    );
+  }
 }
 
 /**
  * Repository for application state persistence
  */
 export class StateRepository {
-    constructor() {
-        this.syncStorage = chrome.storage.sync;
-        this.localStorage = chrome.storage.local;
+  constructor() {
+    this.syncStorage = chrome.storage.sync;
+    this.localStorage = chrome.storage.local;
+  }
+
+  /**
+   * Loads complete application state from storage
+   * @returns {Promise<ApplicationState>} The loaded application state
+   */
+  async loadState() {
+    console.log("StateRepository: Loading settings...");
+    const state = new ApplicationState();
+
+    try {
+      const data = await this.syncStorage.get([
+        "sitesConfig",
+        "profilesConfig",
+        "globalBlockMessage",
+        "isEnabled",
+      ]);
+
+      state.isEnabled = data.isEnabled === undefined ? true : data.isEnabled;
+      state.globalBlockMessage =
+        data.globalBlockMessage || defaultGlobalMessageForBG;
+
+      // Load profiles
+      const rawProfilesConfig = data.profilesConfig || [
+        { name: "Manual", keyword: null },
+      ];
+      state.profilesConfig = rawProfilesConfig.map(Profile.fromObject);
+      console.log("Loaded Profiles Config:", state.profilesConfig);
+
+      // Load and process rules
+      const rawSitesConfig = data.sitesConfig || [];
+      const rules = rawSitesConfig.map(BlockingRule.fromObject);
+      state.setProcessedRules(rules);
+
+      console.log(
+        "Processed Sites Config Count:",
+        state.processedSitesConfig.length
+      );
+    } catch (error) {
+      console.error("Error loading state:", error);
+      this.applyDefaults(state);
     }
 
-    /**
-     * Loads complete application state from storage
-     * @returns {Promise<ApplicationState>} The loaded application state
-     */
-    async loadState() {
-        console.log("StateRepository: Loading settings...");
-        const state = new ApplicationState();
+    return state;
+  }
 
-        try {
-            const data = await this.syncStorage.get([
-                'sitesConfig', 'profilesConfig', 'globalBlockMessage', 'isEnabled'
-            ]);
+  /**
+   * Saves application state to storage
+   * @param {ApplicationState} state - State to save
+   */
+  async saveState(state) {
+    try {
+      const dataToSave = {
+        isEnabled: state.isEnabled,
+        globalBlockMessage: state.globalBlockMessage,
+        profilesConfig: state.profilesConfig.map((p) => p.toObject()),
+      };
 
-            state.isEnabled = data.isEnabled === undefined ? true : data.isEnabled;
-            state.globalBlockMessage = data.globalBlockMessage || defaultGlobalMessageForBG;
-
-            // Load profiles
-            const rawProfilesConfig = data.profilesConfig || [{ name: "Manual", keyword: null }];
-            state.profilesConfig = rawProfilesConfig.map(Profile.fromObject);
-            console.log("Loaded Profiles Config:", state.profilesConfig);
-
-            // Load and process rules
-            const rawSitesConfig = data.sitesConfig || [];
-            const rules = rawSitesConfig.map(BlockingRule.fromObject);
-            state.setProcessedRules(rules);
-
-            console.log("Processed Sites Config Count:", state.processedSitesConfig.length);
-
-        } catch (error) {
-            console.error("Error loading state:", error);
-            this.applyDefaults(state);
-        }
-
-        return state;
+      await this.syncStorage.set(dataToSave);
+      console.log("State saved successfully");
+    } catch (error) {
+      console.error("Error saving state:", error);
     }
+  }
 
-    /**
-     * Saves application state to storage
-     * @param {ApplicationState} state - State to save
-     */
-    async saveState(state) {
-        try {
-            const dataToSave = {
-                isEnabled: state.isEnabled,
-                globalBlockMessage: state.globalBlockMessage,
-                profilesConfig: state.profilesConfig.map(p => p.toObject())
-            };
-
-            await this.syncStorage.set(dataToSave);
-            console.log("State saved successfully");
-        } catch (error) {
-            console.error("Error saving state:", error);
-        }
+  /**
+   * Saves blocking rules to storage
+   * @param {Array<BlockingRule>} rules - Rules to save
+   */
+  async saveRules(rules) {
+    try {
+      const sitesConfig = rules.map((rule) => rule.toObject());
+      await this.syncStorage.set({ sitesConfig });
+      console.log("Rules saved successfully");
+    } catch (error) {
+      console.error("Error saving rules:", error);
     }
+  }
 
-    /**
-     * Saves blocking rules to storage
-     * @param {Array<BlockingRule>} rules - Rules to save
-     */
-    async saveRules(rules) {
-        try {
-            const sitesConfig = rules.map(rule => rule.toObject());
-            await this.syncStorage.set({ sitesConfig });
-            console.log("Rules saved successfully");
-        } catch (error) {
-            console.error("Error saving rules:", error);
-        }
+  /**
+   * Saves profiles to storage
+   * @param {Array<Profile>} profiles - Profiles to save
+   */
+  async saveProfiles(profiles) {
+    try {
+      const profilesConfig = profiles.map((p) => p.toObject());
+      await this.syncStorage.set({ profilesConfig });
+      console.log("Profiles saved successfully");
+    } catch (error) {
+      console.error("Error saving profiles:", error);
     }
+  }
 
-    /**
-     * Saves profiles to storage
-     * @param {Array<Profile>} profiles - Profiles to save
-     */
-    async saveProfiles(profiles) {
-        try {
-            const profilesConfig = profiles.map(p => p.toObject());
-            await this.syncStorage.set({ profilesConfig });
-            console.log("Profiles saved successfully");
-        } catch (error) {
-            console.error("Error saving profiles:", error);
-        }
-    }
+  /**
+   * Applies default values to state
+   * @param {ApplicationState} state - State to apply defaults to
+   */
+  applyDefaults(state) {
+    state.profilesConfig = [new Profile("Manual", null)];
+    state.processedSitesConfig = [];
+    state.globalBlockMessage = defaultGlobalMessageForBG;
+    state.isEnabled = true;
+  }
 
-    /**
-     * Applies default values to state
-     * @param {ApplicationState} state - State to apply defaults to
-     */
-    applyDefaults(state) {
-        state.profilesConfig = [new Profile("Manual", null)];
-        state.processedSitesConfig = [];
-        state.globalBlockMessage = defaultGlobalMessageForBG;
-        state.isEnabled = true;
+  /**
+   * Initializes default settings on extension installation
+   */
+  async initializeSettings() {
+    try {
+      await this.syncStorage.set({
+        sitesConfig: defaultSitesConfigForBG,
+        globalBlockMessage: defaultGlobalMessageForBG,
+        focusKeyword: defaultFocusKeyword,
+        isEnabled: true,
+      });
+      console.log("Default settings applied on install.");
+    } catch (error) {
+      console.error("Error initializing settings:", error);
     }
-
-    /**
-     * Initializes default settings on extension installation
-     */
-    async initializeSettings() {
-        try {
-            await this.syncStorage.set({
-                sitesConfig: defaultSitesConfigForBG,
-                globalBlockMessage: defaultGlobalMessageForBG,
-                focusKeyword: defaultFocusKeyword,
-                isEnabled: true
-            });
-            console.log("Default settings applied on install.");
-        } catch (error) {
-            console.error("Error initializing settings:", error);
-        }
-    }
+  }
+}
 
 /**
  * Repository for manual focus session management
  */
 export class FocusSessionRepository {
-    constructor() {
-        this.localStorage = chrome.storage.local;
-    }
+  constructor() {
+    this.localStorage = chrome.storage.local;
+  }
 
-    /**
-     * Gets the manual focus end time
-     * @returns {Promise<number|null>} Timestamp of end time, or null if not set/expired
-     */
-    async getManualFocusEndTime() {
-        try {
-            const data = await this.localStorage.get(MANUAL_FOCUS_END_TIME_KEY);
-            const endTime = data[MANUAL_FOCUS_END_TIME_KEY];
-            return (endTime && endTime > Date.now()) ? endTime : null;
-        } catch (error) {
-            console.error("Error getting manual focus end time:", error);
-            return null;
-        }
+  /**
+   * Gets the manual focus end time
+   * @returns {Promise<number|null>} Timestamp of end time, or null if not set/expired
+   */
+  async getManualFocusEndTime() {
+    try {
+      const data = await this.localStorage.get(MANUAL_FOCUS_END_TIME_KEY);
+      const endTime = data[MANUAL_FOCUS_END_TIME_KEY];
+      return endTime && endTime > Date.now() ? endTime : null;
+    } catch (error) {
+      console.error("Error getting manual focus end time:", error);
+      return null;
     }
+  }
 
-    /**
-     * Sets the manual focus end time
-     * @param {number} endTime - Timestamp when manual focus should end
-     */
-    async setManualFocusEndTime(endTime) {
-        try {
-            await this.localStorage.set({ [MANUAL_FOCUS_END_TIME_KEY]: endTime });
-            console.log("Manual focus end time set:", new Date(endTime));
-        } catch (error) {
-            console.error("Error setting manual focus end time:", error);
-        }
+  /**
+   * Sets the manual focus end time
+   * @param {number} endTime - Timestamp when manual focus should end
+   */
+  async setManualFocusEndTime(endTime) {
+    try {
+      await this.localStorage.set({ [MANUAL_FOCUS_END_TIME_KEY]: endTime });
+      console.log("Manual focus end time set:", new Date(endTime));
+    } catch (error) {
+      console.error("Error setting manual focus end time:", error);
     }
+  }
 
-    /**
-     * Clears the manual focus end time
-     */
-    async clearManualFocusEndTime() {
-        try {
-            await this.localStorage.remove(MANUAL_FOCUS_END_TIME_KEY);
-            console.log("Manual focus end time cleared.");
-        } catch (error) {
-            console.error("Error clearing manual focus end time:", error);
-        }
+  /**
+   * Clears the manual focus end time
+   */
+  async clearManualFocusEndTime() {
+    try {
+      await this.localStorage.remove(MANUAL_FOCUS_END_TIME_KEY);
+      console.log("Manual focus end time cleared.");
+    } catch (error) {
+      console.error("Error clearing manual focus end time:", error);
     }
+  }
 
-    /**
-     * Updates popup state
-     * @param {string} statusText - Status text to display
-     * @param {number|null} manualEndTime - Manual focus end time or null
-     * @param {number|null} exceptionEndTime - Exception end time or null
-     */
-    updatePopupState(statusText, manualEndTime = null, exceptionEndTime = null) {
-        const stateToSet = { 
-            extensionStatus: statusText,
-            [MANUAL_FOCUS_END_TIME_KEY]: manualEndTime,
-            [EXCEPTION_END_TIME_KEY]: exceptionEndTime
-        };
+  /**
+   * Updates popup state
+   * @param {string} statusText - Status text to display
+   * @param {number|null} manualEndTime - Manual focus end time or null
+   * @param {number|null} exceptionEndTime - Exception end time or null
+   */
+  updatePopupState(statusText, manualEndTime = null, exceptionEndTime = null) {
+    const stateToSet = {
+      extensionStatus: statusText,
+      [MANUAL_FOCUS_END_TIME_KEY]: manualEndTime,
+      [EXCEPTION_END_TIME_KEY]: exceptionEndTime,
+    };
 
-        this.localStorage.set(stateToSet).catch(error => {
-            console.warn("Error setting popup state:", error);
-        });
-    }
+    this.localStorage.set(stateToSet).catch((error) => {
+      console.warn("Error setting popup state:", error);
+    });
+  }
 }
 
 /**
  * Repository for blocked tabs management
  */
 export class TabRepository {
-    constructor() {
-        this.localStorage = chrome.storage.local;
-    }
+  constructor() {
+    this.localStorage = chrome.storage.local;
+  }
 
-    /**
-     * Gets the map of blocked tabs
-     * @returns {Promise<Object>} Map of tabId -> originalUrl
-     */
-    async getBlockedTabs() {
-        try {
-            const data = await this.localStorage.get(BLOCKED_TABS_MAP_KEY);
-            return data[BLOCKED_TABS_MAP_KEY] || {};
-        } catch (error) {
-            console.error("Error getting blocked tabs map:", error);
-            return {};
-        }
+  /**
+   * Gets the map of blocked tabs
+   * @returns {Promise<Object>} Map of tabId -> originalUrl
+   */
+  async getBlockedTabs() {
+    try {
+      const data = await this.localStorage.get(BLOCKED_TABS_MAP_KEY);
+      return data[BLOCKED_TABS_MAP_KEY] || {};
+    } catch (error) {
+      console.error("Error getting blocked tabs map:", error);
+      return {};
     }
+  }
 
-    /**
-     * Adds or updates a tab in the blocked tabs map
-     * @param {number} tabId - Tab ID
-     * @param {string} originalUrl - Original URL of the tab
-     */
-    async addBlockedTab(tabId, originalUrl) {
-        if (!tabId || !originalUrl) return;
-        try {
-            const map = await this.getBlockedTabs();
-            map[tabId] = originalUrl;
-            await this.localStorage.set({ [BLOCKED_TABS_MAP_KEY]: map });
-            console.log(`Blocked tab added/updated: ${tabId} -> ${originalUrl}`);
-        } catch (error) {
-            console.error(`Error adding blocked tab ${tabId}:`, error);
-        }
+  /**
+   * Adds or updates a tab in the blocked tabs map
+   * @param {number} tabId - Tab ID
+   * @param {string} originalUrl - Original URL of the tab
+   */
+  async addBlockedTab(tabId, originalUrl) {
+    if (!tabId || !originalUrl) return;
+    try {
+      const map = await this.getBlockedTabs();
+      map[tabId] = originalUrl;
+      await this.localStorage.set({ [BLOCKED_TABS_MAP_KEY]: map });
+      console.log(`Blocked tab added/updated: ${tabId} -> ${originalUrl}`);
+    } catch (error) {
+      console.error(`Error adding blocked tab ${tabId}:`, error);
     }
+  }
 
-    /**
-     * Removes a tab from the blocked tabs map
-     * @param {number} tabId - Tab ID to remove
-     */
-    async removeBlockedTab(tabId) {
-        if (!tabId) return;
-        try {
-            const map = await this.getBlockedTabs();
-            if (map[tabId]) {
-                delete map[tabId];
-                await this.localStorage.set({ [BLOCKED_TABS_MAP_KEY]: map });
-                console.log(`Blocked tab removed: ${tabId}`);
-            }
-        } catch (error) {
-            console.error(`Error removing blocked tab ${tabId}:`, error);
-        }
+  /**
+   * Removes a tab from the blocked tabs map
+   * @param {number} tabId - Tab ID to remove
+   */
+  async removeBlockedTab(tabId) {
+    if (!tabId) return;
+    try {
+      const map = await this.getBlockedTabs();
+      if (map[tabId]) {
+        delete map[tabId];
+        await this.localStorage.set({ [BLOCKED_TABS_MAP_KEY]: map });
+        console.log(`Blocked tab removed: ${tabId}`);
+      }
+    } catch (error) {
+      console.error(`Error removing blocked tab ${tabId}:`, error);
     }
+  }
 
-    /**
-     * Clears the entire blocked tabs map
-     */
-    async clearBlockedTabs() {
-        try {
-            await this.localStorage.remove(BLOCKED_TABS_MAP_KEY);
-            console.log("Blocked tabs map cleared.");
-        } catch (error) {
-            console.error("Error clearing blocked tabs map:", error);
-        }
+  /**
+   * Clears the entire blocked tabs map
+   */
+  async clearBlockedTabs() {
+    try {
+      await this.localStorage.remove(BLOCKED_TABS_MAP_KEY);
+      console.log("Blocked tabs map cleared.");
+    } catch (error) {
+      console.error("Error clearing blocked tabs map:", error);
     }
+  }
 }
 
 // Backward compatibility functions
 export async function loadStateFromStorage() {
-    const repository = new StateRepository();
-    const state = await repository.loadState();
-    
-    // Convert to old format for backward compatibility
-    return {
-        isEnabled: state.isEnabled,
-        sitesConfig: state.processedSitesConfig.map(rule => rule.toObject()),
-        blockedDomains: state.processedSitesConfig
-            .filter(rule => rule.domain)
-            .map(rule => rule.domain),
-        globalBlockMessage: state.globalBlockMessage,
-        focusKeyword: state.focusKeyword,
-        redirectUrl: state.redirectUrl,
-        profilesConfig: state.profilesConfig.map(p => p.toObject()),
-        processedSitesConfig: state.processedSitesConfig.map(rule => rule.toObject())
-    };
+  const repository = new StateRepository();
+  const state = await repository.loadState();
+
+  // Convert to old format for backward compatibility
+  return {
+    isEnabled: state.isEnabled,
+    sitesConfig: state.processedSitesConfig.map((rule) => rule.toObject()),
+    blockedDomains: state.processedSitesConfig
+      .filter((rule) => rule.domain)
+      .map((rule) => rule.domain),
+    globalBlockMessage: state.globalBlockMessage,
+    focusKeyword: state.focusKeyword,
+    redirectUrl: state.redirectUrl,
+    profilesConfig: state.profilesConfig.map((p) => p.toObject()),
+    processedSitesConfig: state.processedSitesConfig.map((rule) =>
+      rule.toObject()
+    ),
+  };
 }
 
 export async function getManualFocusEndTime() {
-    const repository = new FocusSessionRepository();
-    return repository.getManualFocusEndTime();
+  const repository = new FocusSessionRepository();
+  return repository.getManualFocusEndTime();
 }
 
 export async function setManualFocusEndTime(endTime) {
-    const repository = new FocusSessionRepository();
-    return repository.setManualFocusEndTime(endTime);
+  const repository = new FocusSessionRepository();
+  return repository.setManualFocusEndTime(endTime);
 }
 
 export async function clearManualFocusEndTime() {
-    const repository = new FocusSessionRepository();
-    return repository.clearManualFocusEndTime();
+  const repository = new FocusSessionRepository();
+  return repository.clearManualFocusEndTime();
 }
 
-export function updatePopupState(statusText, manualEndTime = null, exceptionEndTime = null) {
-    const repository = new FocusSessionRepository();
-    return repository.updatePopupState(statusText, manualEndTime, exceptionEndTime);
+export function updatePopupState(
+  statusText,
+  manualEndTime = null,
+  exceptionEndTime = null
+) {
+  const repository = new FocusSessionRepository();
+  return repository.updatePopupState(
+    statusText,
+    manualEndTime,
+    exceptionEndTime
+  );
 }
 
 export async function initializeSettings() {
-    const repository = new StateRepository();
-    return repository.initializeSettings();
+  const repository = new StateRepository();
+  return repository.initializeSettings();
 }
 
 export async function getBlockedTabs() {
-    const repository = new TabRepository();
-    return repository.getBlockedTabs();
+  const repository = new TabRepository();
+  return repository.getBlockedTabs();
 }
 
 export async function addBlockedTab(tabId, originalUrl) {
-    const repository = new TabRepository();
-    return repository.addBlockedTab(tabId, originalUrl);
+  const repository = new TabRepository();
+  return repository.addBlockedTab(tabId, originalUrl);
 }
 
 export async function removeBlockedTab(tabId) {
-    const repository = new TabRepository();
-    return repository.removeBlockedTab(tabId);
+  const repository = new TabRepository();
+  return repository.removeBlockedTab(tabId);
 }
 
 export async function clearBlockedTabs() {
-    const repository = new TabRepository();
-    return repository.clearBlockedTabs();
+  const repository = new TabRepository();
+  return repository.clearBlockedTabs();
 }
